@@ -60,19 +60,14 @@ button { font: inherit; color: inherit; }
 
 #app { position: fixed; inset: 0; overflow: hidden; }
 #map { position: absolute; inset: 0; background: #d9e3e6; }
-@media (prefers-color-scheme: dark) {
-  #map { background: #15272b; }
-  .leaflet-tile-pane { filter: brightness(0.7) contrast(1.05) saturate(0.85); }
-}
-.leaflet-container { font: inherit; }
-.leaflet-control-attribution {
-  font-size: 10px;
-  background: var(--panel) !important;
-  color: var(--muted) !important;
-  margin-bottom: calc(var(--sheet-h) + var(--safe-bottom)) !important;
-  transition: margin 0.2s;
-}
-.leaflet-control-attribution a { color: var(--accent) !important; }
+@media (prefers-color-scheme: dark) { #map { background: #15272b; } }
+.maplibregl-map { font: inherit; }
+.maplibregl-canvas:focus { outline: none; }
+.maplibregl-ctrl-bottom-right { bottom: calc(var(--sheet-h) + var(--safe-bottom)); transition: bottom 0.2s; }
+.maplibregl-ctrl-attrib { background: var(--panel) !important; color: var(--muted) !important; font-size: 10px; border-radius: 10px 0 0 0; }
+.maplibregl-ctrl-attrib a { color: var(--accent) !important; }
+.maplibregl-ctrl-attrib.maplibregl-compact { margin: 0 !important; }
+.maplibregl-marker { will-change: transform; }
 
 /* ---------- generic ---------- */
 .panel {
@@ -162,6 +157,13 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 .fab.active { background: var(--accent); color: var(--accent-fg); }
 .fab.danger-active { background: var(--danger); color: #fff; }
+.fab.compass .needle {
+  display: block; width: 4px; height: 26px; border-radius: 2px;
+  background: linear-gradient(to bottom, #dc2626 50%, var(--muted) 50%);
+  transform: rotate(var(--bearing, 0deg)); transition: transform 0.2s;
+}
+.fab.compass.locked { background: var(--accent); }
+.fab.compass.locked .needle { background: linear-gradient(to bottom, #fff 50%, rgba(255,255,255,0.5) 50%); }
 
 /* ---------- block toolbar & context menu ---------- */
 #block-toolbar {
@@ -289,9 +291,9 @@ button:disabled { opacity: 0.5; cursor: default; }
   position: absolute; inset: 0; border-radius: 50%; background: #1d4ed8; border: 3px solid #fff; box-shadow: 0 0 0 2px rgba(29, 78, 216, 0.35), 0 2px 6px rgba(0, 0, 0, 0.4);
 }
 .me-marker .cone {
-  position: absolute; left: 50%; bottom: 50%; width: 0; height: 0; transform-origin: 50% 100%;
-  border-left: 14px solid transparent; border-right: 14px solid transparent; border-bottom: 34px solid rgba(29, 78, 216, 0.35);
-  margin-left: -14px; margin-bottom: 8px; transition: transform 0.3s;
+  position: absolute; left: 50%; bottom: 50%; width: 0; height: 0;
+  border-left: 16px solid transparent; border-right: 16px solid transparent; border-bottom: 40px solid rgba(29, 78, 216, 0.4);
+  margin-left: -16px; margin-bottom: 8px;
 }
 .me-marker.stale .dot { background: #9ca3af; box-shadow: none; }
 .pin { position: relative; width: 28px; height: 40px; }
@@ -308,4 +310,3 @@ button:disabled { opacity: 0.5; cursor: default; }
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
 }
 .block-label::before { content: "⛔ "; }
-.leaflet-tooltip.block-tip { border: 0; background: var(--panel); color: var(--fg); box-shadow: var(--shadow); }

@@ -23,7 +23,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   units: localeIsImperial() ? 'imperial' : 'metric',
   voice: true,
   profile: 'trekking',
-  tiles: 'osm',
+  tiles: 'liberty',
+  navView: '3d', // '3d' course-up perspective | 'north' north-up flat
   endpoint: DEFAULT_ENDPOINT,
   offRouteMeters: 40,
   autoReroute: true,

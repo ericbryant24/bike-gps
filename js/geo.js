@@ -1,6 +1,6 @@
 // Pure geometry helpers. No DOM access so these can be unit-tested in Node.
 // Coordinates are always `{ lat, lon }` objects internally; conversions to
-// Leaflet's [lat, lng] and GeoJSON's [lon, lat] happen at the edges.
+// MapLibre's [lng, lat] and GeoJSON's [lon, lat] happen at the edges.
 
 export const EARTH_RADIUS = 6371008.8;
 

@@ -15,7 +15,7 @@
   <link rel="manifest" href="./app.webmanifest" />
   <link rel="icon" href="./icons/icon-192.png" type="image/png" />
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
-  <link rel="stylesheet" href="./vendor/leaflet/leaflet.css" />
+  <link rel="stylesheet" href="./vendor/maplibre/maplibre-gl.css" />
   <link rel="stylesheet" href="./css/app.css" />
 </head>
 <body>
@@ -37,6 +37,7 @@
 
     <!-- Right-side map controls -->
     <div id="map-controls">
+      <button id="compass-btn" class="fab compass" aria-label="Reset to north" title="Reset to north" hidden><span class="needle"></span></button>
       <button id="layers-btn" class="fab" aria-label="Map style" title="Map style">▦</button>
       <button id="block-mode-btn" class="fab" aria-label="Block roads" title="Block roads">⛔</button>
       <button id="locate-btn" class="fab" aria-label="My location" title="My location">◎</button>
@@ -145,7 +146,7 @@
     <div id="scrim" hidden></div>
   </div>
 
-  <script src="./vendor/leaflet/leaflet.js"></script>
+  <script src="./vendor/maplibre/maplibre-gl.js"></script>
   <script type="module" src="./js/main.js"></script>
 </body>
 </html>

@@ -147,7 +147,8 @@ export function renderSettings(settings, onChange, { onClearTiles } = {}) {
   return el('div', {}, [
     setting('Units', null, select('units', [['metric', 'Metric (km)'], ['imperial', 'Imperial (mi)']])),
     setting('Voice guidance', 'Spoken turn prompts', toggle(settings.voice, (v) => onChange('voice', v))),
-    setting('Map style', null, select('tiles', Object.entries(TILE_SOURCES).map(([k, v]) => [k, v.label]))),
+    setting('Map style', '3D styles rotate and tilt while navigating', select('tiles', Object.entries(TILE_SOURCES).map(([k, v]) => [k, v.label]))),
+    setting('Navigation view', 'Tap the compass while riding to switch', select('navView', [['3d', '3D, heading up'], ['north', 'Flat, north up']])),
     setting('Street names in directions', 'Looks up road names from OpenStreetMap after each route', toggle(settings.streetNames, (v) => onChange('streetNames', v))),
     setting('Auto-reroute', 'Recalculate when you leave the route', toggle(settings.autoReroute, (v) => onChange('autoReroute', v))),
     setting(
