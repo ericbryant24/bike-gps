@@ -1,0 +1,13 @@
+{
+  "name": "bike-gps",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Mobile-first PWA for turn-by-turn bike navigation with a road blocklist.",
+  "type": "module",
+  "scripts": {
+    "start": "node scripts/serve.mjs",
+    "test": "node --test",
+    "icons": "node scripts/make-icons.mjs"
+  },
+  "license": "MIT"
+}
