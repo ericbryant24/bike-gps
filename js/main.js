@@ -1,6 +1,6 @@
 // App controller: wires the map, routing, blocklist, navigation and UI.
 
-import { MapView, TILE_SOURCES } from './map.js';
+import { MapView, TILE_SOURCES, DEFAULT_TILES } from './map.js';
 import { bbox, distance, formatDistance, formatDuration, formatSpeed, pointAtDistance, slicePath } from './geo.js';
 import { fetchRoute } from './router.js';
 import { announceableSteps, applyNames, stepIcon, stepsFromGeometry, stepsFromVoiceHints } from './instructions.js';
@@ -37,11 +37,13 @@ const state = {
 
 const voice = new Voice({ enabled: state.settings.voice });
 const savedView = store.load(store.KEYS.view);
+if (!TILE_SOURCES[state.settings.tiles]) state.settings.tiles = DEFAULT_TILES;
 const map = new MapView($('map'), {
   center: savedView?.center || { lat: 39.9612, lon: -82.9988 },
   zoom: savedView?.zoom || 13,
   tiles: state.settings.tiles,
 });
+const courseUp = () => state.settings.navView !== 'north';
 
 // ------------------------------------------------------------------ helpers
 const units = () => state.settings.units;
@@ -68,21 +70,39 @@ function reportError(err, fallback = 'Something went wrong') {
   toast(err?.message || fallback, { duration: 5000 });
 }
 
-async function currentPosition({ silent = false } = {}) {
-  if (state.lastFix && Date.now() - state.lastFix.timestamp < 30000) return state.lastFix;
-  if (!navigator.geolocation) throw new Error('Location is not available in this browser.');
+const getPosition = (opts) =>
+  new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(resolve, reject, opts));
+
+/**
+ * Get a usable position. Desktop browsers often can't produce a precise fix,
+ * so a quick high-accuracy attempt is followed by a coarse one that accepts a
+ * cached position; a recent fix we already hold is reused as a last resort.
+ */
+async function currentPosition({ silent = false, maxAgeMs = 30000 } = {}) {
+  if (state.lastFix && Date.now() - state.lastFix.timestamp < maxAgeMs) return state.lastFix;
+  if (!navigator.geolocation) throw new Error('Location is not available in this browser. Long-press the map to choose a start point.');
   if (!silent) pill('Finding your location…', { spinner: true });
+  let lastErr = null;
   try {
-    const pos = await new Promise((resolve, reject) =>
-      navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 })
+    for (const opts of [
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 15000 },
+      { enableHighAccuracy: false, timeout: 12000, maximumAge: 10 * 60 * 1000 },
+    ]) {
+      try {
+        const fix = fixFromPosition(await getPosition(opts));
+        onFix(fix);
+        return fix;
+      } catch (e) {
+        lastErr = e;
+        if (e?.code === 1) break; // permission denied: no point retrying
+      }
+    }
+    if (state.lastFix && Date.now() - state.lastFix.timestamp < 15 * 60 * 1000) return state.lastFix;
+    throw new Error(
+      lastErr?.code === 1
+        ? 'Location permission is off for this site. Allow it in your browser settings, or long-press the map to choose a start point.'
+        : 'Could not get your location (this is common on computers without Wi-Fi location). Long-press the map to choose a start point.'
     );
-    const fix = fixFromPosition(pos);
-    onFix(fix);
-    return fix;
-  } catch (e) {
-    const msg =
-      e?.code === 1 ? 'Location permission denied. Long-press the map to choose a start point.' : 'Could not get your location. Long-press the map to choose a start point.';
-    throw new Error(msg);
   } finally {
     if (!silent) hidePill();
   }
@@ -137,7 +157,18 @@ async function planRoute() {
   const ctrl = new AbortController();
   state.planAbort = ctrl;
   try {
-    const from = state.start || (await currentPosition());
+    let from = state.start;
+    if (!from) {
+      try {
+        from = await currentPosition();
+      } catch (e) {
+        // Still let the user plan: start from the middle of the map and say so.
+        from = map.center;
+        state.start = from;
+        map.setStart(from);
+        toast(`${e.message.split('.')[0]}. Starting from the map centre — long-press to move the start.`, { duration: 7000 });
+      }
+    }
     pill('Finding a route…', { spinner: true });
     const route = await computeRoute(from, state.dest, { signal: ctrl.signal });
     if (ctrl.signal.aborted) return;
@@ -247,7 +278,9 @@ async function startNavigation({ simulate = false } = {}) {
   $('nav-mute').textContent = voice.enabled ? '🔊' : '🔇';
   $('nav-mute').setAttribute('aria-pressed', String(!voice.enabled));
   $('locate-btn').classList.add('active');
-  map.setFollow(true, fix || state.route.from, 17);
+  map.setNavPadding({ top: $('nav-banner').offsetHeight + 24, bottom: $('nav-bottom').offsetHeight + 16 });
+  map.setFollow(true, fix || state.route.from, { courseUp: courseUp(), heading: fix?.heading ?? null });
+  updateCompass();
   map.setProgress(state.route.points, null);
 
   if (simulate) {
@@ -278,6 +311,7 @@ function endNavigation() {
   $('topbar').hidden = false;
   $('locate-btn').classList.remove('active');
   map.setFollow(false);
+  updateCompass();
   if (state.route) {
     map.setRoute(state.route.points);
     $('sheet').hidden = false;
@@ -409,6 +443,7 @@ function addEntry(entry, { replan = true } = {}) {
 
 async function blockRoadAt(p) {
   pill('Looking up the road…', { spinner: true });
+  map.setDrop(p);
   try {
     const ways = await overpass.roadsAt(p, { radius: 18, timeoutMs: 12000 });
     const way = ways[0];
@@ -435,6 +470,7 @@ async function blockRoadAt(p) {
     reportError(e, 'Could not look up that road');
   } finally {
     hidePill();
+    map.setDrop(null);
   }
 }
 
@@ -508,6 +544,7 @@ function setBlockMode(kind) {
   state.blockMode = kind;
   resetStretch();
   $('block-toolbar').hidden = !kind;
+  map.setBlockMode(!!kind);
   if (entering && state.route) $('sheet').hidden = true;
   if (leaving && state.route && state.mode === 'idle') $('sheet').hidden = false;
   $('block-mode-btn').classList.toggle('danger-active', !!kind);
@@ -687,6 +724,7 @@ map.userInteracted = () => {
 };
 let viewTimer = null;
 map.map.on('moveend', () => {
+  updateCompass();
   clearTimeout(viewTimer);
   viewTimer = setTimeout(() => store.save(store.KEYS.view, { center: map.center, zoom: map.zoom }), 500);
 });
@@ -763,13 +801,34 @@ $('locate-btn').addEventListener('click', async () => {
   try {
     const fix = await currentPosition();
     if (state.mode === 'navigating') {
-      map.setFollow(true, fix, 17);
+      map.setFollow(true, fix, { courseUp: courseUp(), heading: state.nav?.state?.bearing ?? null });
       $('locate-btn').classList.add('active');
     } else map.setView(fix, Math.max(map.zoom, 16));
   } catch (e) {
     reportError(e);
   }
 });
+function updateCompass() {
+  const btn = $('compass-btn');
+  const nav = state.mode === 'navigating';
+  const bearing = map.bearing;
+  btn.hidden = !nav && Math.abs(bearing) < 0.5;
+  btn.style.setProperty('--bearing', `${-bearing}deg`);
+  btn.classList.toggle('locked', nav && courseUp());
+  btn.title = nav ? (courseUp() ? 'Switch to north-up' : 'Switch to 3D heading-up') : 'Reset to north';
+}
+map.onBearing = updateCompass;
+$('compass-btn').addEventListener('click', () => {
+  if (state.mode === 'navigating') {
+    state.settings.navView = courseUp() ? 'north' : '3d';
+    saveSettings();
+    const fix = state.lastFix || state.route?.from;
+    map.setFollow(true, fix, { courseUp: courseUp(), heading: state.nav?.state?.bearing ?? null });
+    $('locate-btn').classList.add('active');
+  } else map.resetNorth();
+  updateCompass();
+});
+
 $('block-mode-btn').addEventListener('click', () => setBlockMode(state.blockMode ? null : 'road'));
 $('block-cancel').addEventListener('click', () => setBlockMode(null));
 $('block-kind').addEventListener('click', (e) => {
@@ -828,6 +887,10 @@ function openSettings() {
       if (key === 'tiles') map.setTiles(value);
       if (key === 'voice') voice.enabled = !!value;
       if (key === 'units') renderSheet();
+      if (key === 'navView' && state.mode === 'navigating') {
+        map.setFollow(true, state.lastFix || state.route?.from, { courseUp: courseUp(), heading: state.nav?.state?.bearing ?? null });
+        updateCompass();
+      }
       if (key === 'endpoint' && state.route) planRoute();
     },
     {

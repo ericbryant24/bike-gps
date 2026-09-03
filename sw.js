@@ -8,10 +8,11 @@
  * - Routing / geocoding / Overpass: network only (never stale).
  */
 
-const VERSION = 'v1';
+const VERSION = 'v2';
 const SHELL_CACHE = `bikegps-shell-${VERSION}`;
 const TILE_CACHE = 'bikegps-tiles-v1';
-const TILE_LIMIT = 2500;
+const MAP_ASSET_CACHE = 'bikegps-mapassets-v1';
+const TILE_LIMIT = 3000;
 
 const SHELL = [
   './',
@@ -30,20 +31,17 @@ const SHELL = [
   './js/storage.js',
   './js/geocode.js',
   './js/overpass.js',
-  './vendor/leaflet/leaflet.js',
-  './vendor/leaflet/leaflet.css',
-  './vendor/leaflet/images/layers.png',
-  './vendor/leaflet/images/layers-2x.png',
-  './vendor/leaflet/images/marker-icon.png',
-  './vendor/leaflet/images/marker-icon-2x.png',
-  './vendor/leaflet/images/marker-shadow.png',
+  './vendor/maplibre/maplibre-gl.js',
+  './vendor/maplibre/maplibre-gl.css',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-maskable-512.png',
   './icons/apple-touch-icon.png',
 ];
 
-const TILE_HOSTS = /(^|\.)tile\.openstreetmap\.org$|tile-cyclosm\.openstreetmap\.fr$|basemaps\.cartocdn\.com$/;
+const TILE_HOSTS = /(^|\.)tile\.openstreetmap\.org$|tile-cyclosm\.openstreetmap\.fr$|basemaps\.cartocdn\.com$|^tiles\.openfreemap\.org$/;
+// Style JSON, TileJSON, sprites and glyphs: small, shared by every tile — keep fresh but serve instantly.
+const MAP_ASSET_PATH = /^\/(styles|sprites|fonts|planet$|natural_earth\/[^/]+$)/;
 const API_HOSTS = /brouter\.de$|nominatim\.openstreetmap\.org$|overpass/;
 
 self.addEventListener('install', (event) => {
@@ -68,7 +66,7 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('message', (event) => {
   if (event.data === 'SKIP_WAITING') self.skipWaiting();
-  if (event.data === 'CLEAR_TILES') event.waitUntil(caches.delete(TILE_CACHE));
+  if (event.data === 'CLEAR_TILES') event.waitUntil(Promise.all([caches.delete(TILE_CACHE), caches.delete(MAP_ASSET_CACHE)]));
 });
 
 self.addEventListener('fetch', (event) => {
@@ -81,7 +79,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
   if (TILE_HOSTS.test(url.hostname)) {
-    event.respondWith(tile(req));
+    event.respondWith(MAP_ASSET_PATH.test(url.pathname) ? staleWhileRevalidate(req, MAP_ASSET_CACHE) : tile(req));
     return;
   }
   if (API_HOSTS.test(url.hostname)) return; // network only
@@ -98,8 +96,8 @@ async function navigate(req) {
   }
 }
 
-async function staleWhileRevalidate(req) {
-  const cache = await caches.open(SHELL_CACHE);
+async function staleWhileRevalidate(req, cacheName = SHELL_CACHE) {
+  const cache = await caches.open(cacheName);
   const cached = await cache.match(req, { ignoreSearch: true });
   const network = fetch(req)
     .then((res) => {

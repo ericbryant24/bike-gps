@@ -7,6 +7,7 @@ No build step, no API keys, no backend: it's static HTML/CSS/JS that deploys str
 ## Features
 
 - **Turn-by-turn guidance** with a large maneuver banner, "then…" preview, spoken prompts (Web Speech API), speed, distance remaining and ETA.
+- **3D heading-up navigation view**: the map rotates with your direction of travel and tilts to a perspective view with 3D buildings (MapLibre GL + OpenFreeMap vector tiles). Tap the compass to switch to flat north-up.
 - **Bike-specific routing** via [BRouter](https://brouter.de) — balanced / fast / safest / shortest profiles, with elevation-aware timing.
 - **Road blocklist**
   - *Whole road*: tap a road to block every way with that name nearby.
@@ -16,8 +17,8 @@ No build step, no API keys, no backend: it's static HTML/CSS/JS that deploys str
   - Entries can be toggled, renamed, resized, exported/imported as JSON, and are stored on-device.
 - **Automatic rerouting** when you leave the route, with GPS-glitch tolerance.
 - **Ride simulator** to preview guidance (and rerouting) without leaving your desk.
-- **Offline-capable PWA**: app shell cached, recently viewed map tiles cached (LRU), last route restored on launch, screen wake-lock while navigating, install prompt.
-- **Map styles**: OpenStreetMap, CyclOSM (bike infrastructure), Carto Voyager / Dark. Light and dark themes follow the system.
+- **Offline-capable PWA**: app shell cached, recently viewed map tiles + fonts/sprites cached (LRU), last route restored on launch, screen wake-lock while navigating, install prompt.
+- **Map styles**: OpenFreeMap Liberty / Bright / Positron (vector, 3D), plus raster OpenStreetMap, CyclOSM (bike infrastructure), Carto Voyager / Dark. UI follows the system light/dark theme.
 
 ## How blocking works
 
@@ -51,7 +52,7 @@ css/app.css
 js/
   main.js             controller: wires everything together
   ui.js               DOM helpers and view renderers
-  map.js              Leaflet wrapper (markers, route, blocklist layers, gestures)
+  map.js              MapLibre GL wrapper (styles, camera, markers, route/blocklist layers, gestures)
   geo.js              pure geometry (haversine, snapping, simplification…)
   router.js           BRouter client (URL building, response parsing)
   instructions.js     maneuvers from BRouter voice hints (geometric fallback)
@@ -61,15 +62,15 @@ js/
   geocode.js          Nominatim search/reverse (rate-limited)
   overpass.js         Overpass queries: roads at a point, by name, junctions, street names
   storage.js          localStorage persistence
-vendor/leaflet/       Leaflet 1.9.4 (vendored for offline use)
+vendor/maplibre/      MapLibre GL JS 5.24 (vendored for offline use)
 scripts/              dev server, icon generator
 test/                 node --test suites (+ a real BRouter response fixture)
 ```
 
 ## Services used
 
-Routing by [BRouter](https://brouter.de), search by [Nominatim](https://nominatim.org), road data via the [Overpass API](https://overpass-api.de), map data © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors. These are free, community-run services with usage policies — the app batches and rate-limits its requests, and the routing endpoint is configurable in Settings if you run your own BRouter.
+Routing by [BRouter](https://brouter.de), search by [Nominatim](https://nominatim.org), road data via the [Overpass API](https://overpass-api.de), vector tiles by [OpenFreeMap](https://openfreemap.org), map data © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors. These are free, community-run services with usage policies — the app batches and rate-limits its requests, and the routing endpoint is configurable in Settings if you run your own BRouter.
 
 ## Browser support
 
-Modern mobile browsers (iOS Safari 16+, Chrome/Android). Voice guidance needs the Web Speech API; wake lock and install prompts are used where available.
+Modern mobile browsers (iOS Safari 16+, Chrome/Android) with WebGL. Voice guidance needs the Web Speech API; wake lock and install prompts are used where available.
