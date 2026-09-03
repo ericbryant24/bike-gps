@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+  <meta name="theme-color" content="#0f766e" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0b1a1c" media="(prefers-color-scheme: dark)" />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="description" content="Turn-by-turn bike navigation with roads you can block." />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Bike GPS" />
+  <title>Bike GPS</title>
+  <link rel="manifest" href="./app.webmanifest" />
+  <link rel="icon" href="./icons/icon-192.png" type="image/png" />
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+  <link rel="stylesheet" href="./vendor/leaflet/leaflet.css" />
+  <link rel="stylesheet" href="./css/app.css" />
+</head>
+<body>
+  <div id="app">
+    <div id="map" role="application" aria-label="Map"></div>
+
+    <!-- Search / top bar -->
+    <header id="topbar">
+      <form id="search-form" role="search" autocomplete="off">
+        <button type="button" id="menu-btn" class="icon-btn" aria-label="Menu">☰</button>
+        <input id="search" type="search" placeholder="Where to?" enterkeyhint="search" aria-label="Destination" />
+        <button type="button" id="search-clear" class="icon-btn" aria-label="Clear" hidden>✕</button>
+        <button type="submit" id="search-go" class="icon-btn" aria-label="Search">→</button>
+      </form>
+      <ul id="search-results" class="results" hidden></ul>
+    </header>
+
+    <div id="status-pill" class="pill" hidden></div>
+
+    <!-- Right-side map controls -->
+    <div id="map-controls">
+      <button id="layers-btn" class="fab" aria-label="Map style" title="Map style">▦</button>
+      <button id="block-mode-btn" class="fab" aria-label="Block roads" title="Block roads">⛔</button>
+      <button id="locate-btn" class="fab" aria-label="My location" title="My location">◎</button>
+    </div>
+
+    <!-- Block-editing toolbar -->
+    <div id="block-toolbar" class="panel" hidden>
+      <div class="row between">
+        <strong>Block roads</strong>
+        <button id="block-cancel" class="text-btn">Done</button>
+      </div>
+      <div class="chips" id="block-kind">
+        <button class="chip active" data-kind="road">Whole road</button>
+        <button class="chip" data-kind="stretch">Stretch</button>
+        <button class="chip" data-kind="point">Spot</button>
+      </div>
+      <p id="block-hint" class="hint">Tap a road to block every part of it with that name nearby.</p>
+      <div class="row" id="stretch-actions" hidden>
+        <button id="stretch-reset" class="text-btn">Start over</button>
+      </div>
+    </div>
+
+    <!-- Long-press context menu -->
+    <div id="ctx-menu" class="panel menu" hidden>
+      <div id="ctx-title" class="menu-title">Dropped pin</div>
+      <button data-act="dest">Route here</button>
+      <button data-act="start">Start from here</button>
+      <button data-act="block-road">Block this road</button>
+      <button data-act="block-spot">Block this spot</button>
+      <button data-act="cancel" class="muted">Cancel</button>
+    </div>
+
+    <!-- Planning sheet -->
+    <section id="sheet" class="sheet" hidden>
+      <div class="sheet-handle"></div>
+      <div id="plan-summary" class="row between">
+        <div>
+          <div id="plan-stats" class="stats">
+            <span id="plan-dist">—</span><span class="dot">·</span><span id="plan-time">—</span><span class="dot">·</span><span id="plan-ascend" title="Total climb">↗ —</span>
+          </div>
+          <div id="plan-dest" class="sub">Destination</div>
+        </div>
+        <button id="plan-close" class="icon-btn" aria-label="Clear route">✕</button>
+      </div>
+      <div class="chips" id="profile-chips"></div>
+      <div id="plan-warning" class="warning" hidden></div>
+      <div class="row gap">
+        <button id="start-nav" class="primary grow">Start</button>
+        <button id="simulate-nav" class="secondary" title="Simulate riding this route">▶ Simulate</button>
+        <button id="toggle-steps" class="secondary" aria-expanded="false">Steps</button>
+      </div>
+      <ol id="steps-list" class="steps" hidden></ol>
+    </section>
+
+    <!-- Navigation HUD -->
+    <section id="nav-hud" hidden>
+      <div id="nav-banner" class="banner">
+        <div id="nav-icon" class="nav-icon">⬆</div>
+        <div class="nav-text">
+          <div id="nav-dist" class="nav-dist">—</div>
+          <div id="nav-instr" class="nav-instr">Starting…</div>
+        </div>
+      </div>
+      <div id="nav-then" class="then" hidden>Then <span id="nav-then-icon"></span> <span id="nav-then-text"></span></div>
+      <div id="nav-offroute" class="offroute" hidden>Off route — recalculating…</div>
+      <div id="nav-bottom" class="panel nav-bottom">
+        <div class="nav-metrics">
+          <div><span id="nav-speed" class="big">—</span></div>
+          <div class="center"><span id="nav-remaining" class="big">—</span><span class="sub" id="nav-eta"></span></div>
+          <div class="right"><span id="nav-clock" class="big">—</span></div>
+        </div>
+        <div class="row gap">
+          <button id="nav-mute" class="secondary" aria-pressed="false" title="Voice">🔊</button>
+          <button id="nav-avoid" class="danger grow">⛔ Avoid this road</button>
+          <button id="nav-end" class="secondary">End</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Drawer -->
+    <aside id="drawer" class="drawer" hidden>
+      <div class="drawer-head">
+        <strong>Bike GPS</strong>
+        <button id="drawer-close" class="icon-btn" aria-label="Close">✕</button>
+      </div>
+      <nav>
+        <button data-view="blocklist">⛔ Blocked roads <span id="blocklist-count" class="badge">0</span></button>
+        <button data-view="settings">⚙ Settings</button>
+        <button data-view="about">ℹ About</button>
+        <button id="install-btn" hidden>⬇ Install app</button>
+      </nav>
+    </aside>
+
+    <!-- Modal views -->
+    <div id="modal" class="modal" hidden>
+      <div class="modal-card">
+        <div class="modal-head">
+          <button id="modal-back" class="icon-btn" aria-label="Back">←</button>
+          <strong id="modal-title">Title</strong>
+        </div>
+        <div id="modal-body" class="modal-body"></div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" hidden></div>
+    <div id="scrim" hidden></div>
+  </div>
+
+  <script src="./vendor/leaflet/leaflet.js"></script>
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>
