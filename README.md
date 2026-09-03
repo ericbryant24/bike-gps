@@ -23,7 +23,7 @@ No build step, no API keys, no backend: it's static HTML/CSS/JS that deploys str
 
 BRouter supports "no-go" areas, but a no-go polyline drawn along a road would also block *crossing* that road, because any way segment touching it is forbidden. Instead, Bike GPS fences a blocked road with short **perpendicular gates** placed between junctions (junction positions come from OpenStreetMap via Overpass). Riding along the road must pass through a gate, so it's impossible; crossing at a junction never touches one. Spots use plain circular no-go areas.
 
-Only the blocklist entries near the route's bounding box are sent with each routing request, simplified and capped so the request stays small.
+Only the blocklist entries near the route's bounding box are sent with each routing request, simplified and capped so the request stays small. Blocks within 150 m of the start and destination are lifted for that request, so you can always ride off a blocked road you're standing on (or reach a destination on one).
 
 ## Running locally
 

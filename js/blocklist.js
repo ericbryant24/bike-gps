@@ -145,18 +145,25 @@ const f6 = (n) => n.toFixed(6).replace(/\.?0+$/, '');
  * entries that could plausibly affect a route inside `routeBBox`.
  * Returns { nogos, polylines, used, truncated }.
  */
-export function toNogoParams(entries, routeBBox, { maxPoints = MAX_NOGO_POINTS } = {}) {
+export const RELAX_RADIUS = 150; // metres around start/destination where blocks are lifted
+
+export function toNogoParams(entries, routeBBox, { maxPoints = MAX_NOGO_POINTS, relaxAround = [] } = {}) {
   const circles = [];
   const lines = [];
   const used = [];
   let truncated = false;
   let pointBudget = maxPoints;
+  // A rider standing on a blocked road must be able to ride off it (and reach
+  // a destination on one), so gates and circles right next to the trip's end
+  // points are dropped for that request.
+  const relaxed = (p, extra = 0) => relaxAround.some((z) => distance(z.point, p) <= (z.radius ?? RELAX_RADIUS) + extra);
 
   for (const e of entries) {
     if (!e.enabled) continue;
     const eb = entryBBox(e);
     if (!eb || (routeBBox && !bboxIntersects(eb, routeBBox))) continue;
     if (e.kind === 'point') {
+      if (relaxed(e.center, e.radius)) continue;
       if (pointBudget < 1) {
         truncated = true;
         continue;
@@ -166,7 +173,8 @@ export function toNogoParams(entries, routeBBox, { maxPoints = MAX_NOGO_POINTS }
       used.push(e.id);
       continue;
     }
-    const gates = gatesForEntry(e);
+    const gates = gatesForEntry(e).filter((g) => !relaxed(g[0]) && !relaxed(g[1]));
+    if (!gates.length) continue;
     if (gates.length * 2 > pointBudget) {
       truncated = true;
       continue;

@@ -122,7 +122,7 @@ function routeBBox(from, to) {
 }
 
 async function computeRoute(from, to, { signal } = {}) {
-  const nogo = bl.toNogoParams(state.blocklist, routeBBox(from, to));
+  const nogo = bl.toNogoParams(state.blocklist, routeBBox(from, to), { relaxAround: [{ point: from }, { point: to }] });
   const route = await fetchRoute(
     { endpoint: state.settings.endpoint, from, to, profile: state.settings.profile, nogos: nogo.nogos, polylines: nogo.polylines, nogoIds: nogo.used },
     { signal }
@@ -410,20 +410,25 @@ function addEntry(entry, { replan = true } = {}) {
 async function blockRoadAt(p) {
   pill('Looking up the road…', { spinner: true });
   try {
-    const ways = await overpass.roadsAt(p, { radius: 18 });
+    const ways = await overpass.roadsAt(p, { radius: 18, timeoutMs: 12000 });
     const way = ways[0];
     if (!way || way.dist > 25) {
       toast('No road there. Tap closer to a road, or block a spot instead.');
       return;
     }
     let entry;
-    if (way.name) {
-      const { ways: named, junctions } = await overpass.roadByName(way.name, p);
-      const lines = (named.length ? named : [way]).map((w) => w.points);
-      entry = bl.createRoad(lines, { name: way.name, junctions });
-    } else {
-      const { ways: found, junctions } = await overpass.wayWithJunctions(way.id);
-      entry = bl.createRoad([(found[0] || way).points], { name: overpass.describeWay(way), junctions });
+    try {
+      if (way.name) {
+        const { ways: named, junctions } = await overpass.roadByName(way.name, p, { timeoutMs: 12000 });
+        entry = bl.createRoad((named.length ? named : [way]).map((w) => w.points), { name: way.name, junctions });
+      } else {
+        const { ways: found, junctions } = await overpass.wayWithJunctions(way.id, { timeoutMs: 12000 });
+        entry = bl.createRoad([(found[0] || way).points], { name: overpass.describeWay(way), junctions });
+      }
+    } catch {
+      // Couldn't fetch the rest of the road: block the tapped way on its own.
+      entry = bl.createRoad([way.points], { name: overpass.describeWay(way) });
+      toast('Only this section could be looked up right now.', { duration: 3000 });
     }
     addEntry(entry);
   } catch (e) {

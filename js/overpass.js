@@ -120,9 +120,9 @@ function withDistance(ways, point) {
 }
 
 /** Routable ways within `radius` metres of a point, nearest first. */
-export async function roadsAt(point, { radius = 15, signal } = {}) {
+export async function roadsAt(point, { radius = 15, signal, timeoutMs } = {}) {
   const ql = `[out:json][timeout:20];way(around:${radius},${f6(point.lat)},${f6(point.lon)})${ROUTABLE};out tags geom;`;
-  return withDistance(parseWays(await query(ql, { signal })), point);
+  return withDistance(parseWays(await query(ql, { signal, timeoutMs })), point);
 }
 
 /**
@@ -133,17 +133,17 @@ export async function roadsAt(point, { radius = 15, signal } = {}) {
 // fetched by node id (fast index lookup) so junctions can be derived.
 const ADJACENT = 'node(w.r)->.n;way(bn.n)[highway]->.all;.all out tags geom;';
 
-export async function roadByName(name, near, { radius = 1500, signal } = {}) {
+export async function roadByName(name, near, { radius = 1500, signal, timeoutMs } = {}) {
   const ql = `[out:json][timeout:25];way(around:${radius},${f6(near.lat)},${f6(near.lon)})[highway][name=${qstr(name)}]->.r;${ADJACENT}`;
-  const all = parseWays(await query(ql, { signal }));
+  const all = parseWays(await query(ql, { signal, timeoutMs }));
   const ways = all.filter((w) => w.name === name);
   return { ways, junctions: sharedNodes(all) };
 }
 
 /** A single way by id, with its junctions. */
-export async function wayWithJunctions(wayId, { signal } = {}) {
+export async function wayWithJunctions(wayId, { signal, timeoutMs } = {}) {
   const ql = `[out:json][timeout:25];way(${wayId})->.r;${ADJACENT}`;
-  const all = parseWays(await query(ql, { signal }));
+  const all = parseWays(await query(ql, { signal, timeoutMs }));
   return { ways: all.filter((w) => w.id === wayId), junctions: sharedNodes(all) };
 }
 

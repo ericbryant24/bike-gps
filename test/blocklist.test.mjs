@@ -73,3 +73,19 @@ test('distanceToEntry', () => {
   const stretch = bl.createStretch(road);
   assert.ok(Math.abs(bl.distanceToEntry(stretch, g.destination(g.destination(A, 90, 150), 0, 40)) - 40) < 0.5);
 });
+
+test('blocks next to the start/destination are relaxed so the rider can leave or reach them', () => {
+  const stretch = bl.createStretch(road, { name: 'Main St' });
+  const all = bl.toNogoParams([stretch], null).polylines.split('|').length;
+  const relaxed = bl.toNogoParams([stretch], null, { relaxAround: [{ point: A }] });
+  const kept = relaxed.polylines.split('|').filter(Boolean).length;
+  assert.ok(kept > 0 && kept < all, `${kept} of ${all} gates kept`);
+  for (const gate of relaxed.polylines.split('|')) {
+    const [lon, lat] = gate.split(',').map(Number);
+    assert.ok(g.distance(A, { lat, lon }) > bl.RELAX_RADIUS);
+  }
+  // A spot block containing the start is skipped entirely.
+  const spot = bl.createPoint(g.destination(A, 0, 40), { radius: 30 });
+  assert.equal(bl.toNogoParams([spot], null, { relaxAround: [{ point: A }] }).nogos, '');
+  assert.notEqual(bl.toNogoParams([spot], null).nogos, '');
+});
