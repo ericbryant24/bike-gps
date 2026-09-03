@@ -37,7 +37,7 @@ Geolocation requires a secure context; `localhost` counts. To test on a phone, u
 
 ## Deploying to GitHub Pages
 
-The workflow in `.github/workflows/deploy.yml` runs the tests and publishes the repository root to GitHub Pages on every push to `main`. One-time setup: in the repository **Settings → Pages**, set *Source* to **GitHub Actions**.
+The app is zero-build, so GitHub Pages can serve the repository directly. In **Settings → Pages**, set *Source* to **Deploy from a branch**, branch `main`, folder `/ (root)`. The `.nojekyll` file makes Pages publish files verbatim (Jekyll would otherwise skip `vendor/`). Every push to `main` redeploys; the CI workflow runs the unit tests on each push and pull request.
 
 All asset paths are relative, so the app works from a project subpath (`https://<user>.github.io/bike-gps/`) as well as a custom domain.
 
