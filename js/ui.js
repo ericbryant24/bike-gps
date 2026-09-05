@@ -215,6 +215,11 @@ export function renderSettings(settings, onChange, { onClearTiles, onCheckUpdate
       'BRouter-compatible endpoint',
       el('input', { type: 'url', value: settings.endpoint, onchange: (e) => onChange('endpoint', e.target.value.trim()) })
     ),
+    setting(
+      'Mapbox search token',
+      'Optional. Google-quality place search. Free tier covers personal use; create a public token (pk.…) at account.mapbox.com and restrict it to this site\u2019s URL. Leave empty to use the free OpenStreetMap geocoders.',
+      el('input', { type: 'text', placeholder: 'pk.…', value: settings.mapboxToken || '', autocomplete: 'off', spellcheck: 'false', onchange: (e) => onChange('mapboxToken', e.target.value.trim()) })
+    ),
     setting('Cached map tiles', 'Free up storage', el('button', { class: 'secondary', text: 'Clear', onclick: onClearTiles })),
     setting('App version', version ? `Bike GPS ${version}` : 'Bike GPS', el('button', { class: 'secondary', text: 'Check for updates', onclick: onCheckUpdate })),
   ]);

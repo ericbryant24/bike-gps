@@ -266,3 +266,81 @@ export async function reverse(point, { signal, fetchImpl = globalThis.fetch } = 
     return null;
   }
 }
+
+// ---------------------------------------------------------------- Mapbox
+// Optional: Mapbox Search Box API (needs a public access token, pk.…). Built
+// for place search: fuzzy matching, relevance + proximity ranking, fresh POI
+// data. suggest() is for search-as-you-type (names only, billed per session),
+// retrieve() resolves a suggestion to coordinates, forward() returns full
+// features with coordinates for a committed search or a bounding box.
+const MAPBOX = 'https://api.mapbox.com/search/searchbox/v1';
+const MAPBOX_TYPES = 'poi,address,street,place,neighborhood,locality,district';
+
+export class MapboxAuthError extends Error {}
+
+function mapboxKind(p) {
+  const cat = (p.poi_category || [])[0];
+  if (cat) return cat.replace(/_/g, ' ');
+  return (p.feature_type || '').replace(/_/g, ' ');
+}
+
+/** Normalise a Search Box feature/suggestion into our result shape. */
+export function formatMapbox(p, coords) {
+  const lat = coords?.latitude ?? coords?.lat ?? p.coordinates?.latitude;
+  const lon = coords?.longitude ?? coords?.lon ?? p.coordinates?.longitude;
+  return {
+    label: p.name_preferred || p.name || p.full_address || 'Place',
+    address: p.place_formatted || p.full_address || p.address || '',
+    kind: mapboxKind(p),
+    lat: Number.isFinite(lat) ? lat : undefined,
+    lon: Number.isFinite(lon) ? lon : undefined,
+    distance: Number.isFinite(p.distance) ? p.distance : undefined, // metres from proximity, when given
+    mapboxId: p.mapbox_id,
+    osm: `mapbox=${p.feature_type || ''}`,
+  };
+}
+
+async function mapboxGet(path, params, { token, signal, fetchImpl }) {
+  params.set('access_token', token);
+  params.set('language', (globalThis.navigator?.language || 'en').slice(0, 2));
+  const res = await fetchImpl(`${MAPBOX}/${path}?${params}`, { signal, headers: { Accept: 'application/json' } });
+  if (res.status === 401 || res.status === 403) throw new MapboxAuthError('Mapbox rejected the access token. Check it in Settings.');
+  if (!res.ok) throw new Error(`Mapbox search failed (${res.status})`);
+  return res.json();
+}
+
+/** Search-as-you-type: names + addresses + distance, no coordinates yet. */
+export async function mapboxSuggest(q, { token, session, near, limit = 10, signal, fetchImpl = globalThis.fetch }) {
+  const params = new URLSearchParams({ q: q.trim(), limit: String(Math.min(10, limit)), session_token: session, types: MAPBOX_TYPES });
+  if (near) params.set('proximity', `${near.lon.toFixed(5)},${near.lat.toFixed(5)}`);
+  const json = await mapboxGet('suggest', params, { token, signal, fetchImpl });
+  return (json.suggestions || []).map((sug) => formatMapbox(sug));
+}
+
+/** Coordinates (and full details) for one suggestion. */
+export async function mapboxRetrieve(mapboxId, { token, session, signal, fetchImpl = globalThis.fetch }) {
+  const params = new URLSearchParams({ session_token: session });
+  const json = await mapboxGet(`retrieve/${encodeURIComponent(mapboxId)}`, params, { token, signal, fetchImpl });
+  const f = (json.features || [])[0];
+  if (!f) return null;
+  return formatMapbox(f.properties || {}, { longitude: f.geometry?.coordinates?.[0], latitude: f.geometry?.coordinates?.[1] });
+}
+
+/** Committed search: full features with coordinates, near a point or inside a box. */
+export async function mapboxForward(q, { token, near, bounds, limit = 10, signal, fetchImpl = globalThis.fetch }) {
+  const params = new URLSearchParams({ q: q.trim(), limit: String(Math.min(10, limit)), types: MAPBOX_TYPES });
+  if (near) params.set('proximity', `${near.lon.toFixed(5)},${near.lat.toFixed(5)}`);
+  if (bounds) params.set('bbox', `${bounds.minLon},${bounds.minLat},${bounds.maxLon},${bounds.maxLat}`);
+  const json = await mapboxGet('forward', params, { token, signal, fetchImpl });
+  return (json.features || []).map((f) => formatMapbox(f.properties || {}, { longitude: f.geometry?.coordinates?.[0], latitude: f.geometry?.coordinates?.[1] }));
+}
+
+/** Cheap validity check for a token (one tiny forward request). */
+export async function mapboxCheckToken(token, { fetchImpl = globalThis.fetch } = {}) {
+  try {
+    await mapboxForward('park', { token, near: { lat: 40, lon: -83 }, limit: 1, fetchImpl });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, message: e.message };
+  }
+}
