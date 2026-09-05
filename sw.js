@@ -8,7 +8,8 @@
  * - Routing / geocoding / Overpass: network only (never stale).
  */
 
-const VERSION = 'v2';
+importScripts('./js/version.js');
+const VERSION = self.APP_VERSION;
 const SHELL_CACHE = `bikegps-shell-${VERSION}`;
 const TILE_CACHE = 'bikegps-tiles-v1';
 const MAP_ASSET_CACHE = 'bikegps-mapassets-v1';
@@ -19,6 +20,7 @@ const SHELL = [
   './index.html',
   './app.webmanifest',
   './css/app.css',
+  './js/version.js',
   './js/main.js',
   './js/ui.js',
   './js/map.js',

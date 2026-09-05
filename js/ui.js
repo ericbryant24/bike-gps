@@ -146,7 +146,7 @@ function setting(label, desc, control) {
   return el('div', { class: 'setting' }, [el('div', {}, [el('label', { text: label }), desc ? el('span', { class: 'desc', text: desc }) : null]), control]);
 }
 
-export function renderSettings(settings, onChange, { onClearTiles } = {}) {
+export function renderSettings(settings, onChange, { onClearTiles, onCheckUpdate, version } = {}) {
   const select = (key, options) =>
     el(
       'select',
@@ -173,6 +173,7 @@ export function renderSettings(settings, onChange, { onClearTiles } = {}) {
       el('input', { type: 'url', value: settings.endpoint, onchange: (e) => onChange('endpoint', e.target.value.trim()) })
     ),
     setting('Cached map tiles', 'Free up storage', el('button', { class: 'secondary', text: 'Clear', onclick: onClearTiles })),
+    setting('App version', version ? `Bike GPS ${version}` : 'Bike GPS', el('button', { class: 'secondary', text: 'Check for updates', onclick: onCheckUpdate })),
   ]);
 }
 
@@ -246,9 +247,9 @@ export function renderEntryEditor(entry, units, { onSave, onDelete, onShow }) {
   ]);
 }
 
-export function renderAbout() {
+export function renderAbout(version) {
   return el('div', {}, [
-    el('p', { html: '<strong>Bike GPS</strong> is a turn-by-turn bicycle navigator that lets you block roads you never want to be routed down.' }),
+    el('p', { html: `<strong>Bike GPS</strong>${version ? ` <span class="muted">v${version}</span>` : ''} is a turn-by-turn bicycle navigator that lets you block roads you never want to be routed down.` }),
     el('h4', { text: 'How blocking works' }),
     el('p', {
       text: 'Blocked roads are sent to the router as no-go zones. A blocked road or stretch is fenced with short barriers between junctions, so the router can never travel along it but you can still cross it at intersections. A blocked spot is a circle that nothing may pass through.',

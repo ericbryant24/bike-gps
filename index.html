@@ -130,6 +130,10 @@
         <button data-view="about">ℹ About</button>
         <button id="install-btn" hidden>⬇ Install app</button>
       </nav>
+      <div class="drawer-foot">
+        <span id="drawer-version" class="muted">Bike GPS</span>
+        <button id="drawer-update" class="text-btn">Check for updates</button>
+      </div>
     </aside>
 
     <!-- Modal views -->
@@ -147,6 +151,7 @@
     <div id="scrim" hidden></div>
   </div>
 
+  <script src="./js/version.js"></script>
   <script src="./vendor/maplibre/maplibre-gl.js"></script>
   <script type="module" src="./js/main.js"></script>
 </body>
