@@ -737,6 +737,17 @@ let searchAbort = null;
 state.search = { query: '', results: [], center: null, zoom: null, anchor: null, committed: false };
 
 const RECENT_FIX_MS = 10 * 60 * 1000;
+const MAX_SHOWN_RESULTS = 15; // nearest N; more just clutters the map
+
+/** Merge geocoder and OSM hits; the same place from both sources counts once. */
+function mergePlaces(primary, extra) {
+  const out = [...primary];
+  for (const p of extra) {
+    const dup = out.some((r) => distance(r, p) < 120 && (r.label || '').toLowerCase().split(' ')[0] === (p.label || '').toLowerCase().split(' ')[0]);
+    if (!dup) out.push(p);
+  }
+  return out;
+}
 
 /**
  * Where "near me" is: the rider's location, refreshed quietly when the last
@@ -760,6 +771,7 @@ async function searchAnchor() {
 function showResults(results, anchor, { commit = false, fit = false } = {}) {
   for (const r of results) r.distance = distance(anchor, r);
   results.sort((a, b) => a.distance - b.distance);
+  results = results.slice(0, MAX_SHOWN_RESULTS);
   state.search.results = results;
   state.search.anchor = anchor;
   state.search.committed = commit;
@@ -794,10 +806,23 @@ async function runSearch(q, { fromInput = false } = {}) {
     if (!fromInput) pill('Searching near you…', { spinner: true });
     const anchor = await searchAnchor();
     if (ctrl.signal.aborted) return;
-    const results = await geocode.search(q, { near: anchor, signal: ctrl.signal });
-    if (ctrl.signal.aborted) return;
     state.search.query = q;
-    showResults(results, anchor, { commit: !fromInput, fit: !fromInput });
+    let shown = false;
+    const present = (list, done) => {
+      if (ctrl.signal.aborted) return;
+      showResults(list, anchor, { commit: !fromInput, fit: !fromInput && !shown });
+      shown = shown || list.length > 0;
+      if (done && !fromInput) hidePill();
+    };
+    // Nominatim rings (nearest first) plus an exhaustive OSM name lookup
+    // nearby; whichever answers first is shown and the other is merged in.
+    const [geo, osm] = await Promise.all([
+      geocode.search(q, { near: anchor, signal: ctrl.signal, onProgress: (list) => present(list, false) }),
+      overpass.placesNamed(q, anchor, { signal: ctrl.signal }),
+    ]);
+    if (ctrl.signal.aborted) return;
+    const results = mergePlaces(geo, osm);
+    present(results, true);
     if (!results.length && !fromInput) toast('No places found near you.');
   } catch (e) {
     if (!fromInput) reportError(e, 'Search failed');
