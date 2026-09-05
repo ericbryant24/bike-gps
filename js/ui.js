@@ -269,3 +269,23 @@ export function renderAbout(version) {
     el('p', { class: 'hint', text: 'Your location and blocked roads never leave your device except as part of routing requests.' }),
   ]);
 }
+
+/** Step-by-step install instructions for platforms without an install prompt (iOS). */
+export function renderInstallHelp({ ios, safari }) {
+  const steps = ios
+    ? [
+        safari ? null : el('li', { html: 'Open this page in <b>Safari</b> (other iPhone browsers can install too, but Safari is the most reliable).' }),
+        el('li', { html: 'Tap the <span class="glyph share"></span> <b>Share</b> button — at the bottom of Safari, or in the address bar on iPad.' }),
+        el('li', { html: 'Scroll the sheet and tap <span class="glyph add"></span> <b>Add to Home Screen</b>.' }),
+        el('li', { html: 'Tap <b>Add</b>. Bike GPS opens full-screen from your Home Screen, keeps the map tiles you have viewed for offline use, and updates itself.' }),
+      ]
+    : [
+        el('li', { html: 'Open the browser menu (⋮ or the address bar) and choose <b>Install app</b> or <b>Add to Home screen</b>.' }),
+        el('li', { html: 'Confirm. Bike GPS opens full-screen and updates itself.' }),
+      ];
+  return el('div', {}, [
+    el('p', { text: ios ? 'iPhone and iPad don’t offer install pop-ups for web apps, so it takes two taps in the Share menu:' : 'Install Bike GPS for a full-screen, offline-capable app:' }),
+    el('ol', { class: 'install-how' }, steps),
+    el('p', { class: 'hint', text: 'Location, voice guidance and keep-screen-on all work from the Home Screen app. Allow location when asked.' }),
+  ]);
+}

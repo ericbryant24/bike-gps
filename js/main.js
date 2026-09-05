@@ -10,7 +10,7 @@ import { Voice } from './voice.js';
 import * as store from './storage.js';
 import * as geocode from './geocode.js';
 import * as overpass from './overpass.js';
-import { $, el, toast, hideToast, pill, hidePill, openModal, closeModal, openDrawer, closeDrawer, positionMenu, trackSheetHeight, renderSearchResults, renderProfileChips, renderSteps, renderSettings, renderBlocklist, renderEntryEditor, renderAbout } from './ui.js';
+import { $, el, toast, hideToast, pill, hidePill, openModal, closeModal, openDrawer, closeDrawer, positionMenu, trackSheetHeight, renderSearchResults, renderProfileChips, renderSteps, renderSettings, renderBlocklist, renderEntryEditor, renderAbout, renderInstallHelp } from './ui.js';
 
 const state = {
   settings: store.loadSettings(),
@@ -313,6 +313,7 @@ async function startNavigation({ simulate = false } = {}) {
   $('sheet').hidden = true;
   $('topbar').hidden = true;
   $('search-here').hidden = true;
+  $('install-banner').hidden = true;
   $('block-toolbar').hidden = true;
   $('nav-hud').hidden = false;
   $('nav-offroute').hidden = true;
@@ -1243,6 +1244,16 @@ async function checkForUpdates() {
 }
 
 // --------------------------------------------------------------- PWA plumbing
+const ua = navigator.userAgent || '';
+const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isSafari = isIOS && /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS|OPiOS|DuckDuckGo/.test(ua);
+const isStandalone = () => navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+const INSTALL_HINT_KEY = 'bikegps.installHint.v1';
+
+function showInstallHelp() {
+  openModal('Install Bike GPS', renderInstallHelp({ ios: isIOS, safari: isSafari }));
+}
+
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
   state.installPrompt = e;
@@ -1251,11 +1262,35 @@ window.addEventListener('beforeinstallprompt', (e) => {
 $('install-btn').addEventListener('click', async () => {
   closeDrawer();
   const p = state.installPrompt;
-  if (!p) return;
+  if (!p) {
+    showInstallHelp();
+    return;
+  }
   state.installPrompt = null;
   $('install-btn').hidden = true;
   await p.prompt();
 });
+$('install-dismiss').addEventListener('click', () => {
+  $('install-banner').hidden = true;
+  store.save(INSTALL_HINT_KEY, { dismissedAt: Date.now() });
+});
+$('install-banner').addEventListener('click', (e) => {
+  if (e.target.closest('#install-dismiss')) return;
+  $('install-banner').hidden = true;
+  store.save(INSTALL_HINT_KEY, { dismissedAt: Date.now() });
+  showInstallHelp();
+});
+
+/** iOS has no install prompt: nudge once, then again after a month if still not installed. */
+function maybeOfferIosInstall() {
+  if (!isIOS || isStandalone()) return;
+  $('install-btn').hidden = false; // always reachable from the menu
+  const hint = store.load(INSTALL_HINT_KEY);
+  if (hint?.dismissedAt && Date.now() - hint.dismissedAt < 30 * 24 * 3600 * 1000) return;
+  setTimeout(() => {
+    if (state.mode === 'idle' && !isStandalone()) $('install-banner').hidden = false;
+  }, 4000);
+}
 window.addEventListener('appinstalled', () => toast('Installed! Find Bike GPS on your home screen.'));
 
 function updateOnline() {
@@ -1328,6 +1363,7 @@ function boot() {
     }).catch(() => {});
   }
   window.addEventListener('resize', () => map.invalidate());
+  maybeOfferIosInstall();
 }
 boot();
 
