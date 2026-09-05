@@ -57,6 +57,7 @@ export function parseRoute(body, meta = {}) {
   return {
     points,
     cum,
+    segments: parseSegments(props.messages, points, cum),
     length: Number(props['track-length']) || cum[cum.length - 1],
     time: Number(props['total-time']) || 0,
     ascend: Number(props['filtered ascend']) || 0,
@@ -68,6 +69,63 @@ export function parseRoute(body, meta = {}) {
     nogoIds: meta.nogoIds || [],
     createdAt: Date.now(),
   };
+}
+
+/**
+ * BRouter "messages": one row per stretch of constant way tags, ending at a
+ * track point. Columns: Longitude, Latitude, Elevation, Distance, CostPerKm,
+ * ElevCost, TurnCost, NodeCost, InitialCost, WayTags, NodeTags, Time, Energy.
+ * Returns segments { i0, i1, along0, along1, distance, costPerKm, tags, nodeTags }
+ * mapped onto route point indices.
+ */
+export function parseSegments(messages, points, cum) {
+  if (!Array.isArray(messages) || messages.length < 2) return [];
+  const header = messages[0];
+  const col = (name) => header.indexOf(name);
+  const iLon = col('Longitude');
+  const iLat = col('Latitude');
+  const iDist = col('Distance');
+  const iCost = col('CostPerKm');
+  const iTags = col('WayTags');
+  const iNode = col('NodeTags');
+  if (iLon < 0 || iLat < 0) return [];
+  const segments = [];
+  let ptr = 0;
+  for (const row of messages.slice(1)) {
+    const lon = Number(row[iLon]) / 1e6;
+    const lat = Number(row[iLat]) / 1e6;
+    // Find the track point this message ends at: scan forward from the last one.
+    let end = -1;
+    for (let k = ptr; k < points.length; k++) {
+      if (Math.abs(points[k].lat - lat) < 2e-6 && Math.abs(points[k].lon - lon) < 2e-6) {
+        end = k;
+        break;
+      }
+    }
+    if (end < 0) {
+      // Not an exact track point (rare): advance by the reported distance instead.
+      const target = cum[ptr] + (Number(row[iDist]) || 0);
+      end = ptr;
+      while (end < points.length - 1 && cum[end + 1] <= target + 0.5) end++;
+    }
+    if (end <= ptr && segments.length) {
+      // Zero-length message (e.g. node cost only): fold its node tags into the previous segment.
+      if (iNode >= 0 && row[iNode]) segments[segments.length - 1].nodeTags = [segments[segments.length - 1].nodeTags, row[iNode]].filter(Boolean).join(' ');
+      continue;
+    }
+    segments.push({
+      i0: ptr,
+      i1: end,
+      along0: cum[ptr],
+      along1: cum[end],
+      distance: cum[end] - cum[ptr],
+      costPerKm: iCost >= 0 ? Number(row[iCost]) || 0 : 0,
+      tags: iTags >= 0 ? row[iTags] || '' : '',
+      nodeTags: iNode >= 0 ? row[iNode] || '' : '',
+    });
+    ptr = end;
+  }
+  return segments;
 }
 
 /** Error with a `code` so callers can react ('no-route' → try softer blocks). */

@@ -250,3 +250,22 @@ export async function placesNamed(text, near, { radius = 12000, signal, timeoutM
     return [];
   }
 }
+
+const DETAIL_TAGS = ['opening_hours', 'phone', 'contact:phone', 'website', 'contact:website', 'cuisine', 'brand', 'operator', 'wheelchair', 'addr:housenumber', 'addr:street', 'addr:city'];
+
+/** Extra details (hours, phone, website, address…) for a named place. Never throws. */
+export async function placeDetails(name, near, { signal, timeoutMs = 5000 } = {}) {
+  const ql = `[out:json][timeout:6];nwr(around:40,${f6(near.lat)},${f6(near.lon)})["name"=${qstr(name)}];out center tags 1;`;
+  try {
+    const res = await query(ql, { signal, timeoutMs });
+    const el = (res.elements || [])[0];
+    if (!el?.tags) return null;
+    const t = el.tags;
+    const out = {};
+    for (const k of DETAIL_TAGS) if (t[k]) out[k.replace('contact:', '')] = t[k];
+    const addr = [[t['addr:housenumber'], t['addr:street']].filter(Boolean).join(' '), t['addr:city']].filter(Boolean).join(', ');
+    return { address: addr || null, hours: out.opening_hours || null, phone: out.phone || null, website: out.website || null, cuisine: out.cuisine || null, wheelchair: out.wheelchair || null, type: t.amenity || t.shop || t.leisure || t.tourism || null };
+  } catch {
+    return null;
+  }
+}
