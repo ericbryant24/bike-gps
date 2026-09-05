@@ -47,3 +47,20 @@ test('fetchRoute uses the injected fetch and passes meta through', async () => {
     /busy/
   );
 });
+
+test('routing errors carry a code so callers can soften blocks on "no route"', () => {
+  for (const text of ['no track found at pass=0', 'target island detected for section 0']) {
+    try {
+      parseRoute(text);
+      assert.fail('should throw');
+    } catch (e) {
+      assert.equal(e.code, 'no-route', text);
+    }
+  }
+  try {
+    parseRoute('operation killed by thread priority watchdog');
+    assert.fail('should throw');
+  } catch (e) {
+    assert.equal(e.code, undefined);
+  }
+});

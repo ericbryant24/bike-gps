@@ -48,11 +48,43 @@ test('toNogoParams formats circles and gates, filters by bbox, tracks used ids',
   assert.equal(params.truncated, false);
 });
 
-test('toNogoParams respects the point budget and reports truncation', () => {
+test('toNogoParams packs a byte budget nearest the focus line first, never dropping an entry wholesale', () => {
+  const longRoad = [A, g.destination(A, 90, 2000)];
+  const stretch = bl.createStretch(longRoad, { name: 'Long St' });
+  const full = bl.toNogoParams([stretch], null);
+  assert.ok(full.polylines.split('|').length > 40);
+  // Focus on the western end: only gates near it should survive a tiny budget.
+  const focus = [g.destination(A, 0, 100), g.destination(A, 180, 100)];
+  const tight = bl.toNogoParams([stretch], null, { maxBytes: 300, focus });
+  assert.equal(tight.truncated, true);
+  assert.ok(tight.dropped > 0 && tight.total === full.polylines.split('|').length);
+  assert.deepEqual(tight.used, [stretch.id], 'the entry is still used, just thinned');
+  for (const gate of tight.polylines.split('|')) {
+    const [lon, lat] = gate.split(',').map(Number);
+    assert.ok(g.distance(A, { lat, lon }) < 400, `kept gate should be near the focus, was ${Math.round(g.distance(A, { lat, lon }))} m away`);
+  }
+});
+
+test('toNogoParams can soften blocks into weighted penalties', () => {
+  const stretch = bl.createStretch(road, { name: 'Main St', junctions: [g.destination(A, 90, 100)] });
+  const soft = bl.toNogoParams([stretch], null, { weight: bl.SOFT_WEIGHT });
+  for (const gate of soft.polylines.split('|')) assert.equal(gate.split(',').length, 5);
+  for (const c of soft.nogos.split('|')) assert.match(c, /,100$/);
+});
+
+test('entriesUsedByRoute reports how far a route rides along a blocked road', () => {
   const stretch = bl.createStretch(road, { name: 'Main St' });
-  const params = bl.toNogoParams([stretch], null, { maxPoints: 4 });
-  assert.equal(params.polylines, '');
-  assert.equal(params.truncated, true);
+  const along = { points: [g.destination(A, 90, 50), g.destination(A, 90, 250)] };
+  along.cum = g.cumulativeDistances(along.points);
+  const used = bl.entriesUsedByRoute(along, [stretch]);
+  assert.equal(used.length, 1);
+  assert.ok(Math.abs(used[0].meters - 200) < 30, `${used[0].meters}`);
+  const parallel = { points: [g.destination(A, 0, 60), g.destination(g.destination(A, 90, 300), 0, 60)] };
+  parallel.cum = g.cumulativeDistances(parallel.points);
+  assert.equal(bl.entriesUsedByRoute(parallel, [stretch]).length, 0);
+  const crossing = { points: [g.destination(g.destination(A, 90, 150), 0, 100), g.destination(g.destination(A, 90, 150), 180, 100)] };
+  crossing.cum = g.cumulativeDistances(crossing.points);
+  assert.equal(bl.entriesUsedByRoute(crossing, [stretch]).length, 0, 'merely crossing is not using');
 });
 
 test('normalizeEntry recovers stored entries and rejects junk', () => {

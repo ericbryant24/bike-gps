@@ -28,7 +28,7 @@ BRouter supports "no-go" areas, but a no-go polyline drawn along a road would al
 
 Each blocked road has a **crossing rule**. With *only at traffic lights* (the default), every junction along the road that has no `highway=traffic_signals` node nearby is additionally closed with a 5 m no-go circle, so the router can only cross where there's a light. T-junctions where the blocked road ends are left open, since there's nothing to cross there. *At any intersection* skips the circles.
 
-Only the blocklist entries near the route's bounding box are sent with each routing request, simplified and capped so the request stays small. Blocks within 150 m of the start and destination are lifted for that request, so you can always ride off a blocked road you're standing on (or reach a destination on one).
+Only the blocklist entries near the route's bounding box are sent with each routing request. The router accepts about 25 KB of no-go data per request, so gates and circles are ranked by distance to the trip (start→destination line, then the actual route on a second pass) and packed nearest-first into a 20 KB budget — long blocks are thinned far from the trip rather than dropped. After routing, the app checks whether the result still rides along any blocked road and says so. If no route can avoid every block, it retries with *soft* penalties so the router spends as little distance as possible on blocked roads, and the summary names the roads used. Blocks within 150 m of the start and destination are lifted for that request, so you can always ride off a blocked road you're standing on (or reach a destination on one).
 
 ## Running locally
 
