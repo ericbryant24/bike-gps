@@ -44,6 +44,8 @@ Geolocation requires a secure context; `localhost` counts. To test on a phone, u
 
 The app is zero-build, so GitHub Pages can serve the repository directly. In **Settings → Pages**, set *Source* to **Deploy from a branch**, branch `main`, folder `/ (root)`. The `.nojekyll` file makes Pages publish files verbatim (Jekyll would otherwise skip `vendor/`). Every push to `main` redeploys; the CI workflow runs the unit tests on each push and pull request.
 
+**Bump `APP_VERSION` in `js/version.js` with every deploy.** It names the service-worker cache, so a new value is what makes already-installed apps fetch the new files (users see an "Update available" toast, and Settings has a "Check for updates" button).
+
 All asset paths are relative, so the app works from a project subpath (`https://<user>.github.io/bike-gps/`) as well as a custom domain.
 
 ## Project layout

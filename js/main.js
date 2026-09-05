@@ -860,6 +860,11 @@ document.addEventListener('click', (e) => {
 
 $('menu-btn').addEventListener('click', openDrawer);
 $('drawer-close').addEventListener('click', closeDrawer);
+$('drawer-version').textContent = `Bike GPS v${self.APP_VERSION || '?'}`;
+$('drawer-update').addEventListener('click', () => {
+  closeDrawer();
+  checkForUpdates();
+});
 $('scrim').addEventListener('click', () => {
   closeDrawer();
 });
@@ -869,7 +874,7 @@ $('drawer').addEventListener('click', (e) => {
   closeDrawer();
   if (view === 'blocklist') openBlocklistView();
   else if (view === 'settings') openSettings();
-  else if (view === 'about') openModal('About', renderAbout());
+  else if (view === 'about') openModal('About', renderAbout(self.APP_VERSION));
 });
 $('modal-back').addEventListener('click', closeModal);
 $('modal').addEventListener('click', (e) => {
@@ -973,13 +978,67 @@ function openSettings() {
       if (key === 'endpoint' && state.route) planRoute();
     },
     {
+      version: self.APP_VERSION,
       onClearTiles: () => {
         navigator.serviceWorker?.controller?.postMessage('CLEAR_TILES');
         toast('Cached map tiles cleared.');
       },
+      onCheckUpdate: checkForUpdates,
     }
   );
   openModal('Settings', body);
+}
+
+/** Last resort: drop the service worker and the app-shell cache, then reload from the network. */
+async function hardRefresh() {
+  pill('Reloading…', { spinner: true });
+  try {
+    const regs = (await navigator.serviceWorker?.getRegistrations?.()) || [];
+    await Promise.all(regs.map((r) => r.unregister()));
+    const keys = await caches.keys();
+    await Promise.all(keys.filter((k) => k.startsWith('bikegps-shell')).map((k) => caches.delete(k)));
+  } catch {
+    /* reload anyway */
+  }
+  location.reload();
+}
+
+/**
+ * Fetch the newest build and switch to it. A new service worker precaches
+ * with cache:'reload', which bypasses the browser's HTTP cache; once it is
+ * waiting we tell it to take over, and the controllerchange handler reloads.
+ */
+async function checkForUpdates() {
+  if (!('serviceWorker' in navigator)) {
+    location.reload();
+    return;
+  }
+  pill('Checking for updates…', { spinner: true });
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (!reg) {
+      location.reload();
+      return;
+    }
+    await reg.update();
+    const worker = reg.installing || reg.waiting;
+    if (!worker) {
+      toast(`You're on the latest version (${self.APP_VERSION}).`, { action: 'Force reload', onAction: hardRefresh, duration: 8000 });
+      return;
+    }
+    const activate = () => worker.postMessage('SKIP_WAITING');
+    if (worker.state === 'installed') activate();
+    else {
+      worker.addEventListener('statechange', () => {
+        if (worker.state === 'installed') activate();
+      });
+    }
+    toast('Updating…', { duration: 8000 });
+  } catch (e) {
+    reportError(e, 'Update check failed');
+  } finally {
+    hidePill();
+  }
 }
 
 // --------------------------------------------------------------- PWA plumbing

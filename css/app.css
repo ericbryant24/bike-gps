@@ -256,6 +256,10 @@ button:disabled { opacity: 0.5; cursor: default; }
   padding: 14px 12px; border-radius: 12px; font-size: 16px; cursor: pointer;
 }
 .drawer nav button:hover { background: var(--accent-soft); }
+.drawer-foot {
+  position: absolute; left: 12px; right: 12px; bottom: calc(12px + var(--safe-bottom));
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; padding: 0 4px 0 12px;
+}
 .modal { position: absolute; inset: 0; z-index: 1700; background: var(--bg); display: flex; flex-direction: column; }
 .modal-card { display: flex; flex-direction: column; height: 100%; }
 .modal-head {
