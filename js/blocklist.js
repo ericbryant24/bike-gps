@@ -62,17 +62,25 @@ export function createPoint(center, { radius = DEFAULT_POINT_RADIUS, name = '' }
   };
 }
 
-export function createStretch(line, { name = '', junctions = [], signals = [], crossing = DEFAULT_CROSSING } = {}) {
-  return withLines({ kind: 'stretch', name: name || 'Blocked stretch', lines: [line], junctions, signals, crossing });
+/**
+ * Options shared by road/stretch entries:
+ *   junctions, signals   – from OpenStreetMap (Overpass)
+ *   signalsKnown         – false when traffic-light data could not be loaded;
+ *                          the 'signals' rule then leaves junctions open
+ *                          rather than guessing
+ *   gateHalfWidth        – wider gates for approximate (tile-simplified) geometry
+ */
+export function createStretch(line, opts = {}) {
+  return withLines({ kind: 'stretch', name: opts.name || 'Blocked stretch', lines: [line], ...opts });
 }
 
-export function createRoad(lines, { name = '', junctions = [], signals = [], crossing = DEFAULT_CROSSING } = {}) {
-  return withLines({ kind: 'road', name: name || 'Blocked road', lines, junctions, signals, crossing });
+export function createRoad(lines, opts = {}) {
+  return withLines({ kind: 'road', name: opts.name || 'Blocked road', lines, ...opts });
 }
 
 const pt = (p) => ({ lat: p.lat, lon: p.lon });
 
-function withLines({ kind, name, lines, junctions, signals, crossing }) {
+function withLines({ kind, name, lines, junctions = [], signals = [], crossing = DEFAULT_CROSSING, signalsKnown = true, gateHalfWidth = null, source = null }) {
   const clean = lines.filter((l) => l && l.length >= 2).map((l) => l.map(pt));
   const all = clean.flat();
   return {
@@ -84,6 +92,9 @@ function withLines({ kind, name, lines, junctions, signals, crossing }) {
     lines: clean,
     junctions: (junctions || []).map(pt),
     signals: (signals || []).map(pt),
+    signalsKnown: signalsKnown !== false,
+    gateHalfWidth: Number.isFinite(gateHalfWidth) ? gateHalfWidth : null,
+    source,
     crossing: CROSSING_RULES[crossing] ? crossing : DEFAULT_CROSSING,
     bbox: all.length ? bbox(all) : null,
     length: clean.reduce((acc, l) => acc + cumulativeDistances(l).at(-1), 0),
@@ -126,6 +137,7 @@ export function isSignalled(junction, signals) {
 /** Circles that close unsignalled junctions under the 'signals' crossing rule. */
 export function junctionBlocksForEntry(entry) {
   if (entry.kind === 'point' || (entry.crossing || DEFAULT_CROSSING) !== 'signals') return [];
+  if (entry.signalsKnown === false) return []; // no light data: don't close junctions on a guess
   return crossableJunctions(entry).filter((j) => !isSignalled(j, entry.signals));
 }
 
@@ -186,9 +198,10 @@ export function gatesForLine(line, { junctions = [], halfWidth = GATE_HALF_WIDTH
 export function gatesForEntry(entry) {
   if (entry.kind === 'point' || !entry.lines) return [];
   const out = [];
+  const halfWidth = Number.isFinite(entry.gateHalfWidth) ? entry.gateHalfWidth : GATE_HALF_WIDTH;
   for (const line of entry.lines) {
     // Light simplification so densely-noded curves don't produce a gate per metre.
-    out.push(...gatesForLine(simplify(line, 0.5), { junctions: entry.junctions }));
+    out.push(...gatesForLine(simplify(line, 0.5), { junctions: entry.junctions, halfWidth }));
   }
   return out;
 }
@@ -307,7 +320,17 @@ export function normalizeEntry(raw) {
   }
   if (raw.kind === 'road' || raw.kind === 'stretch') {
     if (!Array.isArray(raw.lines) || !raw.lines.length) return null;
-    const e = withLines({ kind: raw.kind, name: raw.name, lines: raw.lines, junctions: raw.junctions, signals: raw.signals, crossing: raw.crossing });
+    const e = withLines({
+      kind: raw.kind,
+      name: raw.name,
+      lines: raw.lines,
+      junctions: raw.junctions,
+      signals: raw.signals,
+      crossing: raw.crossing,
+      signalsKnown: raw.signalsKnown,
+      gateHalfWidth: raw.gateHalfWidth,
+      source: raw.source,
+    });
     return { ...e, id: raw.id, enabled: raw.enabled !== false, createdAt: raw.createdAt || e.createdAt };
   }
   return null;
