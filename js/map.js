@@ -7,7 +7,7 @@
 
 /* global maplibregl */
 
-import { destination } from './geo.js';
+import { cumulativeDistances, destination, distance, snapToPath } from './geo.js';
 
 const OFM = 'https://tiles.openfreemap.org/styles';
 const OSM_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
@@ -397,6 +397,79 @@ export class MapView {
     ];
     const f = this.map.queryRenderedFeatures(box, { layers })[0];
     return f ? this.entries?.find((e) => e.id === f.properties.id) || null : null;
+  }
+
+  // ---------------------------------------------------- roads from the tiles
+  /**
+   * Identify the road under a point from the vector tiles already loaded —
+   * instant and offline. Returns { name, class, lines, junctions, source:'tiles' }
+   * or null (raster style, nothing loaded, or no road within `radius`).
+   * Geometry is tile-simplified, so callers should treat it as approximate.
+   */
+  roadFromTiles(p, { radius = 25 } = {}) {
+    const m = this.map;
+    if (!m.getSource('openmaptiles')) return null;
+    let named;
+    try {
+      named = m.querySourceFeatures('openmaptiles', { sourceLayer: 'transportation_name' });
+    } catch {
+      return null;
+    }
+    const toLines = (f) => (f.geometry.type === 'LineString' ? [f.geometry.coordinates] : f.geometry.type === 'MultiLineString' ? f.geometry.coordinates : []).map((l) => l.map(([lon, lat]) => ({ lat, lon })));
+    let best = null;
+    for (const f of named) {
+      if (!f.properties?.name) continue;
+      for (const line of toLines(f)) {
+        if (line.length < 2) continue;
+        const d = snapToPath(p, line, cumulativeDistances(line), 0, line.length).dist;
+        if (d <= radius && (!best || d < best.d)) best = { d, f };
+      }
+    }
+    if (!best) return null;
+    const name = best.f.properties.name;
+    // All fragments of that road in the loaded tiles, minus duplicate segments from tile buffers.
+    const seen = new Set();
+    const key = (a, b) => `${a.lat.toFixed(6)},${a.lon.toFixed(6)}|${b.lat.toFixed(6)},${b.lon.toFixed(6)}`;
+    const lines = [];
+    for (const f of named) {
+      if (f.properties?.name !== name) continue;
+      for (const line of toLines(f)) {
+        let cur = [];
+        for (let i = 0; i < line.length - 1; i++) {
+          const k = key(line[i], line[i + 1]);
+          const kr = key(line[i + 1], line[i]);
+          if (seen.has(k) || seen.has(kr)) {
+            if (cur.length >= 2) lines.push(cur);
+            cur = [];
+            continue;
+          }
+          seen.add(k);
+          if (!cur.length) cur.push(line[i]);
+          cur.push(line[i + 1]);
+        }
+        if (cur.length >= 2) lines.push(cur);
+      }
+    }
+    // Junctions: vertices of this road that coincide with a vertex of another road geometry.
+    const ours = new Map();
+    for (const l of lines) for (const v of l) ours.set(`${v.lat.toFixed(6)},${v.lon.toFixed(6)}`, v);
+    const junctions = [];
+    try {
+      const roads = m.querySourceFeatures('openmaptiles', { sourceLayer: 'transportation' });
+      const hit = new Set();
+      for (const f of roads) {
+        for (const line of toLines(f)) {
+          const onOurs = line.filter((v) => ours.has(`${v.lat.toFixed(6)},${v.lon.toFixed(6)}`));
+          // A geometry that mostly runs along our road is the road itself, not a cross street.
+          if (onOurs.length >= 2 && onOurs.length / line.length > 0.5) continue;
+          for (const v of onOurs) hit.add(`${v.lat.toFixed(6)},${v.lon.toFixed(6)}`);
+        }
+      }
+      for (const k of hit) junctions.push(ours.get(k));
+    } catch {
+      /* junctions optional */
+    }
+    return { name, class: best.f.properties.class || null, lines, junctions, source: 'tiles', distance: best.d };
   }
 
   // -------------------------------------------------------------- gestures

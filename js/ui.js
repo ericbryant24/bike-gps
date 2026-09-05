@@ -230,7 +230,15 @@ export function renderEntryEditor(entry, units, { onSave, onDelete, onShow }) {
     setting('Name', null, name),
     radius ? setting('Radius (m)', 'Everything inside is avoided, including crossings', radius) : null,
     crossing
-      ? setting('Crossing allowed', lights ? `${lights} traffic ${lights === 1 ? 'light' : 'lights'} found on this road` : 'No traffic lights found on this road', crossing)
+      ? setting(
+          'Crossing allowed',
+          entry.signalsKnown === false
+            ? 'Traffic-light data could not be loaded — junctions stay open under the lights rule'
+            : lights
+              ? `${lights} traffic ${lights === 1 ? 'light' : 'lights'} found on this road`
+              : 'No traffic lights found on this road',
+          crossing
+        )
       : null,
     entry.kind !== 'point'
       ? el('p', { class: 'hint', text: `${formatDistance(entry.length || 0, units)} of road. Riding along it is never allowed; crossing follows the rule above.` })

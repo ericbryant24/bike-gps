@@ -34,6 +34,7 @@ const state = {
   installPrompt: null,
   planAbort: null,
   pending: null,
+  lookup: null,
 };
 
 const voice = new Voice({ enabled: state.settings.voice });
@@ -432,20 +433,23 @@ async function avoidRoadAhead() {
     return;
   }
   pill('Blocking this road…', { spinner: true });
-  let name = 'Road ahead';
-  let junctions = [];
+  const local = map.roadFromTiles(line[Math.floor(line.length / 2)]);
+  let name = local?.name || 'Road ahead';
+  let junctions = local?.junctions || [];
   let signals = [];
+  let signalsKnown = false;
   try {
     const along = await Promise.race([overpass.waysAlong(line), new Promise((_, rej) => setTimeout(() => rej(new Error('slow')), 4000))]);
     junctions = along.junctions;
     signals = along.signals;
+    signalsKnown = true;
     name = describeStretch(along.ways) || name;
   } catch {
     /* fall back to the plain geometry */
   } finally {
     hidePill();
   }
-  const entry = bl.createStretch(line, { name, junctions, signals, crossing: state.settings.crossing });
+  const entry = bl.createStretch(line, { name, junctions, signals, signalsKnown, crossing: state.settings.crossing });
   addEntry(entry, { replan: false });
   state.lastRerouteAt = 0;
   if (state.nav) {
@@ -524,7 +528,8 @@ function renderPreviewMeta() {
   else {
     const junctions = bl.crossableJunctions(d).length;
     const lights = (d.signals || []).length;
-    text = `${formatDistance(d.length || 0, units())}${d.lines.length > 1 ? ` · ${d.lines.length} sections` : ''} · ${junctions} ${junctions === 1 ? 'junction' : 'junctions'} · ${lights} traffic ${lights === 1 ? 'light' : 'lights'}`;
+    const lightsText = d.signalsKnown === false ? 'traffic lights not loaded' : `${lights} traffic ${lights === 1 ? 'light' : 'lights'}`;
+    text = `${formatDistance(d.length || 0, units())}${d.lines.length > 1 ? ` · ${d.lines.length} sections` : ''} · ${junctions} ${junctions === 1 ? 'junction' : 'junctions'} · ${lightsText}`;
   }
   if (p.note) text += ` · ${p.note}`;
   $('preview-meta').textContent = text;
@@ -550,46 +555,101 @@ function confirmPreview() {
   addEntry(draft);
 }
 
+function cancelLookup() {
+  state.lookup?.abort();
+  state.lookup = null;
+  $('block-hint').textContent = state.blockMode ? BLOCK_HINTS[state.blockMode] : '';
+}
+
 async function blockRoadAt(p) {
   if (state.blockMode !== 'road') setBlockMode('road');
   cancelPreview();
-  pill('Looking up the road…', { spinner: true });
+  cancelLookup();
+  const ctrl = (state.lookup = new AbortController());
   map.setDrop(p);
+  const rangeKm = activeChip('preview-range', 'km', 5);
+
+  // 1) Instant answer from the map tiles on screen (works offline).
+  const local = map.roadFromTiles(p);
+  if (local) {
+    const draft = bl.createRoad(local.lines, {
+      name: local.name,
+      junctions: local.junctions,
+      signalsKnown: false,
+      gateHalfWidth: 10,
+      source: 'tiles',
+      crossing: state.settings.crossing,
+    });
+    showPreview(draft, { tap: p, way: { name: local.name, points: local.lines[0] }, rangeKm, note: 'visible part of the road — loading its full length and traffic lights…' });
+    map.setDrop(null);
+    // 2) Enrich from OpenStreetMap in the background; the card updates when it lands.
+    previewRoad({ name: local.name, points: local.lines[0] }, p, rangeKm, { signal: ctrl.signal, quiet: true }).catch(() => {});
+    return;
+  }
+
+  // Raster style or nothing loaded here: fall back to the map-data server.
+  pill('Looking up the road…', { spinner: true });
+  $('block-hint').textContent = 'Looking up the road…';
   try {
-    const ways = await overpass.roadsAt(p, { radius: 18, timeoutMs: 8000 });
+    const ways = await overpass.roadsAt(p, { radius: 18, timeoutMs: 8000, signal: ctrl.signal });
+    if (ctrl.signal.aborted) return;
     const way = ways[0];
     if (!way || way.dist > 25) {
       toast('No road there. Tap closer to a road, or block a spot instead.');
       return;
     }
-    await previewRoad(way, p, activeChip('preview-range', 'km', 5));
+    await previewRoad(way, p, rangeKm, { signal: ctrl.signal });
   } catch (e) {
-    reportError(e, 'Could not look up that road');
+    if (!ctrl.signal.aborted) reportError(e, 'Could not look up that road — the map-data server may be busy. Try again in a moment.');
   } finally {
     hidePill();
     map.setDrop(null);
+    if (state.lookup === ctrl) cancelLookup();
   }
 }
 
-/** Build (or rebuild, for a new range) the whole-road draft and show it. */
-async function previewRoad(way, tap, rangeKm) {
-  pill(`Loading ${way.name || 'road'} within ${rangeKm} km…`, { spinner: true });
-  let draft;
+/**
+ * Build (or rebuild, for a new range) the whole-road draft from OpenStreetMap
+ * and show it. With `quiet`, an existing tile-based preview stays on screen
+ * and is replaced only if the lookup succeeds.
+ */
+async function previewRoad(way, tap, rangeKm, { signal, quiet = false } = {}) {
+  const label = `Loading ${way.name || 'road'} within ${rangeKm} km…`;
+  if (!quiet) pill(label, { spinner: true });
+  $('block-hint').textContent = label;
+  let draft = null;
   let note = null;
   try {
     if (way.name) {
-      const { ways: named, junctions, signals } = await overpass.roadByName(way.name, tap, { radius: rangeKm * 1000, timeoutMs: 20000 });
-      draft = bl.createRoad((named.length ? named : [way]).map((w) => w.points), { name: way.name, junctions, signals, crossing: state.settings.crossing });
-    } else {
-      const { ways: found, junctions, signals } = await overpass.wayWithJunctions(way.id, { timeoutMs: 20000 });
-      draft = bl.createRoad([(found[0] || way).points], { name: overpass.describeWay(way), junctions, signals, crossing: state.settings.crossing });
+      const { ways: named, junctions, signals } = await overpass.roadByName(way.name, tap, { radius: rangeKm * 1000, timeoutMs: 20000, signal });
+      if (named.length) draft = bl.createRoad(named.map((w) => w.points), { name: way.name, junctions, signals, source: 'osm', crossing: state.settings.crossing });
+    } else if (way.id) {
+      const { ways: found, junctions, signals } = await overpass.wayWithJunctions(way.id, { timeoutMs: 20000, signal });
+      draft = bl.createRoad([(found[0] || way).points], { name: overpass.describeWay(way), junctions, signals, source: 'osm', crossing: state.settings.crossing });
     }
   } catch {
-    draft = bl.createRoad([way.points], { name: overpass.describeWay(way), crossing: state.settings.crossing });
-    note = 'map data is busy, so only the tapped section loaded — pick a range to retry';
+    /* handled below */
   } finally {
-    hidePill();
+    if (!quiet) hidePill();
   }
+  if (signal?.aborted) return;
+  if (!draft) {
+    if (quiet && state.pending?.tap === tap) {
+      state.pending.note = 'map-data server busy: showing the visible part of the road; crossing allowed at all junctions until traffic-light data loads. Pick a range to retry.';
+      renderPreviewMeta();
+      $('block-hint').textContent = BLOCK_HINTS.road;
+      return;
+    }
+    draft = bl.createRoad([way.points], { name: overpass.describeWay(way), signalsKnown: false, gateHalfWidth: 10, crossing: state.settings.crossing });
+    note = 'map-data server busy: only the tapped section loaded — pick a range to retry';
+  }
+  // Keep whatever the user already typed/chose on the card.
+  if (state.pending?.tap === tap) {
+    draft.crossing = $('preview-crossing').value || draft.crossing;
+    const typed = $('preview-name').value.trim();
+    if (typed && typed !== state.pending.draft.name) draft.name = typed;
+  }
+  $('block-hint').textContent = BLOCK_HINTS.road;
   showPreview(draft, { way, tap, rangeKm, note });
 }
 
@@ -606,6 +666,11 @@ async function stretchTap(p) {
   if (pick.points.length === 1) {
     $('block-hint').textContent = 'Now tap where the blocked stretch should end.';
     $('stretch-actions').hidden = false;
+    const local = map.roadFromTiles(p);
+    if (local) {
+      map.setHighlight(local.lines.flat());
+      return;
+    }
     try {
       const ways = await overpass.roadsAt(p, { radius: 18, timeoutMs: 6000 });
       if (ways[0] && ways[0].dist < 25 && state.stretchPick === pick) map.setHighlight(ways[0].points);
@@ -625,6 +690,7 @@ async function stretchTap(p) {
     let name = 'Blocked stretch';
     let junctions = [];
     let signals = [];
+    let signalsKnown = false;
     let note = null;
     try {
       // Junction/light data is a bonus; don't hold the preview hostage to it.
@@ -632,11 +698,12 @@ async function stretchTap(p) {
       junctions = along.junctions;
       signals = along.signals;
       name = describeStretch(along.ways) || name;
+      signalsKnown = true;
     } catch {
       note = 'map data is busy, so junctions and lights could not be loaded';
     }
     hidePill();
-    showPreview(bl.createStretch(path.points, { name, junctions, signals, crossing: state.settings.crossing }), { note });
+    showPreview(bl.createStretch(path.points, { name, junctions, signals, signalsKnown, crossing: state.settings.crossing }), { note });
   } catch (e) {
     reportError(e, 'Could not trace that stretch');
   } finally {
@@ -670,6 +737,7 @@ function setBlockMode(kind) {
   const entering = !!kind && !state.blockMode;
   const leaving = !kind && !!state.blockMode;
   state.blockMode = kind;
+  cancelLookup();
   cancelPreview();
   resetStretch();
   $('block-toolbar').hidden = !kind;
@@ -1107,7 +1175,10 @@ $('preview-range').addEventListener('click', async (e) => {
   if (!chip || !state.pending?.way) return;
   for (const c of $('preview-range').querySelectorAll('.chip')) c.classList.toggle('active', c === chip);
   const { way, tap } = state.pending;
-  await previewRoad(way, tap, Number(chip.dataset.km));
+  cancelLookup();
+  const ctrl = (state.lookup = new AbortController());
+  await previewRoad(way, tap, Number(chip.dataset.km), { signal: ctrl.signal });
+  if (state.lookup === ctrl) cancelLookup();
 });
 $('preview-radius').addEventListener('click', (e) => {
   const chip = e.target.closest('.chip');

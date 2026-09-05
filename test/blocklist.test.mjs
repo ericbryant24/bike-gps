@@ -155,3 +155,17 @@ test('crossing rule and signals survive storage round-trips; unknown rules fall 
   assert.equal(bl.normalizeEntry({ ...JSON.parse(JSON.stringify(e)), crossing: 'bogus' }).crossing, bl.DEFAULT_CROSSING);
   assert.equal(bl.createStretch(road).crossing, 'signals');
 });
+
+test('without traffic-light data the signals rule leaves junctions open; wide gates for tile geometry', () => {
+  const j1 = g.destination(A, 90, 100);
+  const unknown = bl.createRoad([road], { junctions: [j1], signalsKnown: false, gateHalfWidth: 10, source: 'tiles' });
+  assert.equal(bl.junctionBlocksForEntry(unknown).length, 0);
+  const gate = bl.toNogoParams([unknown], null).polylines.split('|')[0].split(',').map(Number);
+  assert.ok(Math.abs(g.distance({ lon: gate[0], lat: gate[1] }, { lon: gate[2], lat: gate[3] }) - 20) < 0.1, 'gate is 2×10 m wide');
+  const back = bl.normalizeEntry(JSON.parse(JSON.stringify(unknown)));
+  assert.equal(back.signalsKnown, false);
+  assert.equal(back.gateHalfWidth, 10);
+  // Legacy entries (no flag) are treated as known.
+  const legacy = bl.normalizeEntry({ ...JSON.parse(JSON.stringify(unknown)), signalsKnown: undefined });
+  assert.equal(legacy.signalsKnown, true);
+});
