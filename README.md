@@ -80,7 +80,7 @@ test/                 node --test suites (+ a real BRouter response fixture)
 
 ## Services used
 
-Routing by [BRouter](https://brouter.de), search by [Nominatim](https://nominatim.org), road data via the [Overpass API](https://overpass-api.de), vector tiles by [OpenFreeMap](https://openfreemap.org), map data © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors. These are free, community-run services with usage policies — the app batches and rate-limits its requests, and the routing endpoint is configurable in Settings if you run your own BRouter.
+Routing by [BRouter](https://brouter.de), search by [Photon](https://photon.komoot.io) with [Nominatim](https://nominatim.org) as fallback, road data via the [Overpass API](https://overpass-api.de), vector tiles by [OpenFreeMap](https://openfreemap.org), map data © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors. These are free, community-run services with usage policies — the app batches and rate-limits its requests, and the routing endpoint is configurable in Settings if you run your own BRouter.
 
 ## Browser support
 

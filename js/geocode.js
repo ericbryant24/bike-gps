@@ -1,7 +1,11 @@
 // Nominatim geocoding. Usage policy: ≤1 request/second, identify the app.
 // Requests are serialised through a small queue that enforces the spacing.
 
+import { distance } from './geo.js';
+
 const ENDPOINT = 'https://nominatim.openstreetmap.org';
+const NEARBY_KM = 80; // results beyond this are dropped when enough closer ones exist
+const ENOUGH = 3;
 const MIN_GAP_MS = 1500;
 const results = new Map(); // session cache: query key → results
 const MAX_CACHED = 40;
@@ -41,6 +45,7 @@ function formatResult(r) {
     label: name,
     address: parts.join(', ') || r.display_name.split(',').slice(1, 4).join(',').trim(),
     kind: (r.type || '').replace(/_/g, ' '),
+    osm: `${r.class || ''}=${r.type || ''}`,
     lat: Number(r.lat),
     lon: Number(r.lon),
   };
@@ -87,8 +92,76 @@ const box = (near, km) => {
   return { minLon: near.lon - dLon, maxLon: near.lon + dLon, minLat: near.lat - dLat, maxLat: near.lat + dLat };
 };
 
+// ---------------------------------------------------------------- Photon
+// Komoot's Photon geocoder: prefix ("search as you type") matching on place
+// names, location-biased, CORS-enabled, free for fair use. Much better than
+// Nominatim for "glen echo" → Glen Echo Park; Nominatim remains the fallback.
+const PHOTON = 'https://photon.komoot.io/api/';
+
+const PHOTON_KIND = {
+  park: 'park', supermarket: 'supermarket', fuel: 'fuel', cafe: 'café', restaurant: 'restaurant', fast_food: 'fast food', bar: 'bar', pub: 'pub',
+  school: 'school', university: 'university', hospital: 'hospital', pharmacy: 'pharmacy', library: 'library', bicycle: 'bike shop', bicycle_parking: 'bike parking',
+  neighbourhood: 'neighbourhood', suburb: 'neighbourhood', city: 'city', town: 'town', village: 'village', hamlet: 'hamlet', locality: 'area',
+  stream: 'stream', river: 'river', cycleway: 'bike path', path: 'path', footway: 'footpath',
+};
+
+function formatPhoton(f) {
+  const p = f.properties || {};
+  const [lon, lat] = f.geometry?.coordinates || [];
+  const name = p.name || [p.housenumber, p.street].filter(Boolean).join(' ') || p.city || 'Place';
+  const kind = p.osm_key === 'highway' ? (PHOTON_KIND[p.osm_value] || 'road') : PHOTON_KIND[p.osm_value] || (p.osm_value || '').replace(/_/g, ' ');
+  const addr = [
+    p.name && p.housenumber && p.street ? `${p.housenumber} ${p.street}` : p.name ? p.street : null,
+    p.district && p.district !== name ? p.district : null,
+    p.city || p.county,
+    p.state,
+  ].filter(Boolean);
+  return { label: name, address: [...new Set(addr)].join(', '), kind: kind === name.toLowerCase() ? '' : kind, lat, lon, osm: `${p.osm_key}=${p.osm_value}` };
+}
+
+/** Same-named features of the same type in the same town count once (streams, roads come in segments). */
+function collapse(list, near) {
+  const best = new Map();
+  for (const r of list) {
+    if (!Number.isFinite(r.lat) || !Number.isFinite(r.lon)) continue;
+    const k = `${r.label}|${r.osm || r.kind}|${(r.address || '').split(',').slice(-2).join(',')}`.toLowerCase();
+    const d = near ? Math.hypot((r.lat - near.lat) * 111, (r.lon - near.lon) * 111 * Math.cos((near.lat * Math.PI) / 180)) : 0;
+    if (!best.has(k) || best.get(k).d > d) best.set(k, { d, r });
+  }
+  return [...best.values()].map((x) => x.r);
+}
+
+/** Alternative spellings worth trying when a name search comes up short. */
+export function spellingVariants(q) {
+  const out = [];
+  const t = q.trim();
+  if (/['’]/.test(t)) out.push(t.replace(/['’]/g, ''));
+  else if (/s$/i.test(t) && t.length > 3) {
+    out.push(`${t.slice(0, -1)}'s`); // whits → whit's
+    out.push(t.slice(0, -1)); // whits → whit (prefix match)
+  }
+  return [...new Set(out)].filter((v) => v && v.toLowerCase() !== t.toLowerCase());
+}
+
+async function photon(q, near, { limit = 40, signal, fetchImpl }) {
+  const p = new URLSearchParams({ q, limit: String(limit), lang: (globalThis.navigator?.language || 'en').slice(0, 2) });
+  if (near) {
+    p.set('lat', near.lat.toFixed(5));
+    p.set('lon', near.lon.toFixed(5));
+    p.set('location_bias_scale', '0.6');
+    p.set('zoom', '14');
+  }
+  const res = await fetchImpl(`${PHOTON}?${p}`, { signal, headers: { Accept: 'application/json' } });
+  if (!res.ok) throw new Error(`Search failed (${res.status})`);
+  const json = await res.json();
+  return collapse((json.features || []).map(formatPhoton), near);
+}
+
 /**
  * Search for places near a point.
+ *
+ * Photon first (prefix matching, distance-biased). If it is unreachable, the
+ * Nominatim ring search below takes over.
  *
  * Nominatim returns at most `limit` matches inside a box ranked by its own
  * importance score, not by distance — so one big box around the rider can
@@ -103,8 +176,29 @@ export async function search(query, { near, rings = [4, 12, 30], limit = 40, wan
   const direct = parseLatLon(q);
   if (direct) return [{ label: `${direct.lat.toFixed(5)}, ${direct.lon.toFixed(5)}`, address: 'Coordinates', kind: '', ...direct }];
   const key = `near|${q.toLowerCase()}|${near ? `${near.lat.toFixed(2)},${near.lon.toFixed(2)}` : '-'}`;
-  return cached(key, () =>
-    throttled(async () => {
+  return cached(key, async () => {
+    try {
+      const nearby = (list) => (near ? list.filter((r) => distance(near, r) < NEARBY_KM * 1000) : list);
+      let hits = await photon(q, near, { signal, fetchImpl });
+      onProgress?.(hits.map((r) => ({ ...r })));
+      // Too few nearby? Names with apostrophes ("Whit's") don't match "whits":
+      // retry likely spellings and merge.
+      if (nearby(hits).length < ENOUGH) {
+        for (const v of spellingVariants(q)) {
+          const more = await photon(v, near, { signal, fetchImpl }).catch(() => []);
+          hits = collapse([...hits, ...more], near);
+          onProgress?.(hits.map((r) => ({ ...r })));
+          if (nearby(hits).length >= ENOUGH) break;
+        }
+      }
+      const close = nearby(hits);
+      if (close.length >= ENOUGH) return close;
+      if (hits.length) return hits;
+    } catch (e) {
+      if (signal?.aborted) throw e;
+      /* fall back to Nominatim */
+    }
+    return throttled(async () => {
       let merged = [];
       if (near) {
         for (const km of rings) {
@@ -122,9 +216,9 @@ export async function search(query, { near, rings = [4, 12, 30], limit = 40, wan
         if (near) p.set('viewbox', viewbox(box(near, 60)));
         merged = dedupe([...merged, ...(await nominatim(p, { signal, fetchImpl }))]);
       }
-      return merged;
-    })
-  );
+      return collapse(merged, near);
+    });
+  });
 }
 
 /** Search only inside the given bounds ("search this area"). */
@@ -136,7 +230,7 @@ export async function searchInBounds(query, bounds, { limit = 12, signal, fetchI
     const p = baseParams(q, limit);
     p.set('viewbox', viewbox(bounds));
     p.set('bounded', '1');
-    return nominatim(p, { signal, fetchImpl });
+    return collapse(await nominatim(p, { signal, fetchImpl }), { lat: (bounds.minLat + bounds.maxLat) / 2, lon: (bounds.minLon + bounds.maxLon) / 2 });
   }));
 }
 
