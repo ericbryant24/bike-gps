@@ -2,9 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spellingVariants, parseLatLon } from '../js/geocode.js';
 
-test('spelling variants for possessive names', () => {
-  assert.deepEqual(spellingVariants('whits'), ["whit's", 'whit']);
-  assert.deepEqual(spellingVariants("Whit's"), ['Whits']);
+test('spelling variants cover straight and curly apostrophes', () => {
+  assert.deepEqual(spellingVariants('whits'), ["whit's", 'whit\u2019s']);
+  assert.deepEqual(spellingVariants("Whit's"), ['Whit\u2019s', 'Whits']);
+  assert.deepEqual(spellingVariants('Whit\u2019s'), ["Whit's", 'Whits']);
   assert.deepEqual(spellingVariants('kroger'), []);
   assert.deepEqual(spellingVariants('bus'), []);
 });
