@@ -16,6 +16,9 @@ No build step, no API keys, no backend: it's static HTML/CSS/JS that deploys str
   - *Avoid this road* while navigating: blocks the road you're on and reroutes instantly.
   - **Crossing rule** per block: *only at traffic lights* (default) or *at any intersection*.
   - Entries can be toggled, renamed, resized, exported/imported as JSON, and are stored on-device.
+- **Road ratings**: every stretch of a planned route is graded A–E for bike-friendliness from its OpenStreetMap tags (separated path → quiet street → moderate → busy → major road, adjusted for bike lanes, protected lanes, signed cycle routes, speed limits and unpaved surfaces). The route is coloured by grade on the map, the summary shows a composition bar and overall grade, and each turn-by-turn step shows its road's grade, description and the lights/stops on it.
+- **Tap a place on the map** (shop, park, café… from the tile data) to see its type, distance, address, hours and contact where available, and route to it.
+- **Share a route**: the link carries the route's own geometry, so the recipient sees the exact path (not one re-planned with their blocks) and can navigate it; one tap re-plans with their own blocks. GPX export for other devices.
 - **Search** anchored to *your location* regardless of where the map is: suggestions appear as you type without moving the map; Enter/Go sorts results by distance from you, drops numbered pins and fits them into view; "Search this area" (after you pan) is the only search that uses the visible map instead.
 - **Automatic rerouting** when you leave the route, with GPS-glitch tolerance.
 - **Ride simulator** to preview guidance (and rerouting) without leaving your desk.
@@ -60,7 +63,9 @@ js/
   ui.js               DOM helpers and view renderers
   map.js              MapLibre GL wrapper (styles, camera, markers, route/blocklist layers, gestures)
   geo.js              pure geometry (haversine, snapping, simplification…)
-  router.js           BRouter client (URL building, response parsing)
+  router.js           BRouter client (URL building, response and segment parsing)
+  rating.js           bike-friendliness grading of route segments
+  share.js            route links (encoded polyline) and GPX export
   instructions.js     maneuvers from BRouter voice hints (geometric fallback)
   blocklist.js        blocklist model → no-go gates/circles
   navigator.js        navigation engine + ride simulator

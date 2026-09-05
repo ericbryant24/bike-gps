@@ -211,9 +211,15 @@ export function applyNames(steps, nameAt) {
   return steps;
 }
 
-/** Steps worth announcing / listing: drop unnamed "continue straight" filler. */
+/**
+ * Steps worth announcing / listing: drop unnamed "continue straight" filler.
+ * distToNext is recomputed so it measures to the next *kept* step.
+ */
 export function announceableSteps(steps) {
-  return steps.filter((s) => !(s.kind === 'continue' && !s.name));
+  const kept = steps.filter((s) => !(s.kind === 'continue' && !s.name));
+  const total = steps.length ? steps[steps.length - 1].along : 0;
+  for (let i = 0; i < kept.length; i++) kept[i].distToNext = i + 1 < kept.length ? kept[i + 1].along - kept[i].along : total - kept[i].along;
+  return kept;
 }
 
 /** Direction arrow glyph used in the UI for a step. */

@@ -4,13 +4,15 @@ import { MapView, TILE_SOURCES, DEFAULT_TILES } from './map.js';
 import { bbox, distance, formatDistance, formatDuration, formatSpeed, pointAtDistance, slicePath } from './geo.js';
 import { fetchRoute } from './router.js';
 import { announceableSteps, applyNames, stepIcon, stepsFromGeometry, stepsFromVoiceHints } from './instructions.js';
+import { rateSegments, rateSteps, routeComposition, gradeRuns } from './rating.js';
+import { shareUrl, parseSharedRoute, toGpx } from './share.js';
 import * as bl from './blocklist.js';
 import { Navigator, simulateRide } from './navigator.js';
 import { Voice } from './voice.js';
 import * as store from './storage.js';
 import * as geocode from './geocode.js';
 import * as overpass from './overpass.js';
-import { $, el, toast, hideToast, pill, hidePill, openModal, closeModal, openDrawer, closeDrawer, positionMenu, trackSheetHeight, renderSearchResults, renderProfileChips, renderSteps, renderSettings, renderBlocklist, renderEntryEditor, renderAbout, renderInstallHelp } from './ui.js';
+import { $, el, toast, hideToast, pill, hidePill, openModal, closeModal, openDrawer, closeDrawer, positionMenu, trackSheetHeight, renderSearchResults, renderProfileChips, renderSteps, renderSettings, renderBlocklist, renderEntryEditor, renderAbout, renderInstallHelp, renderComposition } from './ui.js';
 
 const state = {
   settings: store.loadSettings(),
@@ -133,6 +135,7 @@ async function enrichNames(route, steps) {
   applyNames(steps, (s) => names[steps.indexOf(s)]);
   if (state.mode !== 'navigating') {
     state.announceable = announceableSteps(steps);
+    applyRatings();
     renderSteps($('steps-list'), state.announceable, units());
   } else if (state.nav?.state) renderHud(state.nav.state);
   store.save(store.KEYS.lastRoute, { route, steps, dest: state.dest, destLabel: state.destLabel, start: state.start });
@@ -223,6 +226,21 @@ async function planRoute() {
   }
 }
 
+/** Grade the roads of the current route; annotates steps and colours the map. */
+function applyRatings() {
+  const r = state.route;
+  if (!r?.segments?.length) {
+    $('route-comp').hidden = true;
+    map.setRouteGrades(null);
+    return;
+  }
+  const rated = rateSegments(r);
+  r.composition = routeComposition(rated);
+  rateSteps(state.announceable, rated);
+  renderComposition($('route-comp'), r.composition, units());
+  map.setRouteGrades(state.mode === 'navigating' ? null : gradeRuns(r, rated));
+}
+
 function setRoute(route, steps) {
   state.route = route;
   state.steps = steps;
@@ -277,6 +295,9 @@ function renderSheet() {
     warn.textContent = `Avoiding ${blockedUsed} blocked ${blockedUsed === 1 ? 'road' : 'roads'}${r.truncated ? ' (far-away parts of long blocks were left out of this request)' : ''}.`;
     warn.hidden = false;
   } else warn.hidden = true;
+  applyRatings();
+  $('shared-note').hidden = !r.shared;
+  $('plan-time').textContent = r.shared ? `~${formatDuration(r.time)}` : formatDuration(r.time);
   renderSteps($('steps-list'), state.announceable, units());
   $('sheet').hidden = false;
   $('install-banner').hidden = true;
@@ -322,6 +343,7 @@ async function startNavigation({ simulate = false } = {}) {
   $('nav-mute').textContent = voice.enabled ? '🔊' : '🔇';
   $('nav-mute').setAttribute('aria-pressed', String(!voice.enabled));
   $('locate-btn').classList.add('active');
+  map.setRouteGrades(null);
   map.setNavPadding({ top: $('nav-banner').offsetHeight + 24, bottom: $('nav-bottom').offsetHeight + 16 });
   map.setFollow(true, fix || state.route.from, { courseUp: courseUp(), heading: fix?.heading ?? null });
   updateCompass();
@@ -358,7 +380,7 @@ function endNavigation() {
   updateCompass();
   if (state.route) {
     map.setRoute(state.route.points);
-    $('sheet').hidden = false;
+    renderSheet();
     map.fitPoints(state.route.points, { top: 80, bottom: $('sheet').offsetHeight || 220 });
   }
 }
@@ -1017,7 +1039,11 @@ map.onLongPress = (p, xy) => {
   if (state.mode === 'navigating') return;
   map.setDrop(p);
   state.ctxPoint = p;
-  $('ctx-title').textContent = `${p.lat.toFixed(5)}, ${p.lon.toFixed(5)}`;
+  state.ctxLabel = null;
+  const title = $('ctx-title');
+  title.textContent = `${p.lat.toFixed(5)}, ${p.lon.toFixed(5)}`;
+  title.classList.remove('place');
+  $('ctx-details').hidden = true;
   positionMenu($('ctx-menu'), xy.x, xy.y);
 };
 map.onTap = (p) => {
@@ -1037,6 +1063,42 @@ map.onBlockTap = (entry) => {
   openEntryEditor(entry);
 };
 map.onResultTap = (r) => pickPlace(r);
+
+const humanType = (poi) =>
+  (poi.subclass || poi.class || '')
+    .replace(/_/g, ' ')
+    .replace(/^\w/, (c) => c.toUpperCase());
+
+/** A place tapped on the map: show what we know and offer to route there. */
+map.onPoiTap = async (poi, xy) => {
+  if (state.mode === 'navigating') return;
+  const p = { lat: poi.lat, lon: poi.lon };
+  state.ctxPoint = p;
+  state.ctxLabel = poi.name;
+  map.setDrop(p);
+  const title = $('ctx-title');
+  title.textContent = poi.name;
+  title.classList.add('place');
+  const details = $('ctx-details');
+  const ref = state.lastFix || map.center;
+  const lines = [el('div', { class: 'type', text: [humanType(poi), state.lastFix ? `${formatDistance(distance(ref, p), units())} away` : null].filter(Boolean).join(' · ') })];
+  details.replaceChildren(...lines);
+  details.hidden = false;
+  positionMenu($('ctx-menu'), xy.x, xy.y);
+  // Enrich quietly: address from the geocoder, hours/phone/website from OSM.
+  const token = (state.ctxToken = Symbol('poi'));
+  const [rev, more] = await Promise.all([geocode.reverse(p), overpass.placeDetails(poi.name, p)]);
+  if (state.ctxToken !== token || $('ctx-menu').hidden) return;
+  const extra = [];
+  const address = more?.address || rev?.address || null;
+  if (address) extra.push(el('div', { text: address }));
+  if (more?.hours) extra.push(el('div', { text: `Hours: ${more.hours}` }));
+  if (more?.cuisine) extra.push(el('div', { text: `Cuisine: ${more.cuisine.replace(/_/g, ' ').replace(/;/g, ', ')}` }));
+  if (more?.phone) extra.push(el('div', {}, [el('a', { href: `tel:${more.phone.replace(/\s+/g, '')}`, text: more.phone })]));
+  if (more?.website) extra.push(el('div', {}, [el('a', { href: more.website, target: '_blank', rel: 'noopener', text: more.website.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '') })]));
+  details.append(...extra);
+  positionMenu($('ctx-menu'), xy.x, xy.y);
+};
 $('search-here').addEventListener('click', searchHere);
 map.userInteracted = () => {
   if (state.mode === 'navigating' && map.follow) {
@@ -1057,7 +1119,14 @@ $('ctx-menu').addEventListener('click', (e) => {
   if (!act) return;
   $('ctx-menu').hidden = true;
   const p = state.ctxPoint;
-  if (act === 'dest') setDestination(p);
+  if (act === 'dest') {
+    if (state.ctxLabel) {
+      store.pushRecent({ label: state.ctxLabel, lat: p.lat, lon: p.lon });
+      $('search').value = state.ctxLabel;
+      $('search-clear').hidden = false;
+    }
+    setDestination(p, state.ctxLabel || undefined);
+  }
   else if (act === 'start') {
     state.start = p;
     map.setStart(p);
@@ -1217,6 +1286,70 @@ $('layers-btn').addEventListener('click', () => {
 });
 
 $('plan-close').addEventListener('click', clearRoute);
+
+// ---- sharing
+async function shareCurrentRoute() {
+  const r = state.route;
+  if (!r) return;
+  const label = state.destLabel || 'Bike route';
+  const url = shareUrl(r, { label });
+  const text = `${label} — ${formatDistance(r.length, units())} by bike`;
+  const body = el('div', {}, [
+    el('p', { class: 'hint', text: 'The link contains this exact route. Whoever opens it sees your path (not one re-planned with their blocks) and can navigate it.' }),
+    el('div', { class: 'row gap', style: 'flex-wrap:wrap' }, [
+      navigator.share ? el('button', { class: 'primary', text: 'Share link…', onclick: () => navigator.share({ title: label, text, url }).then(closeModal).catch(() => {}) }) : null,
+      el('button', {
+        class: 'secondary',
+        text: 'Copy link',
+        onclick: async () => {
+          try {
+            await navigator.clipboard.writeText(url);
+            toast('Link copied.');
+            closeModal();
+          } catch {
+            prompt('Copy this link', url);
+          }
+        },
+      }),
+      el('button', { class: 'secondary', text: 'Download GPX', onclick: () => downloadText(`${label.replace(/[^\w-]+/g, '_')}.gpx`, toGpx(r, { name: label }), 'application/gpx+xml') }),
+    ]),
+    el('p', { class: 'hint', style: 'margin-top:12px;word-break:break-all', text: url }),
+  ]);
+  openModal('Share route', body);
+}
+
+function downloadText(filename, text, type) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type }));
+  a.download = filename;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+$('share-route').addEventListener('click', shareCurrentRoute);
+$('replan-own').addEventListener('click', () => {
+  if (!state.dest) return;
+  state.start = null;
+  planRoute();
+});
+
+/** A route received via link: show it as-is, navigable, with a way to re-plan. */
+function loadSharedRoute(shared) {
+  state.dest = shared.to;
+  state.destLabel = shared.label || 'Shared destination';
+  state.start = shared.from;
+  const steps = buildSteps(shared);
+  setRoute(shared, steps);
+  if (state.destLabel) {
+    $('search').value = state.destLabel;
+    $('search-clear').hidden = false;
+  }
+  map.fitPoints(shared.points, { top: 80, bottom: $('sheet').offsetHeight || 260 });
+  enrichNames(shared, steps).catch(() => {});
+  toast('Opened a shared route.', { duration: 4000 });
+}
 $('start-nav').addEventListener('click', () => startNavigation());
 $('simulate-nav').addEventListener('click', () => startNavigation({ simulate: true }));
 $('toggle-steps').addEventListener('click', () => {
@@ -1411,8 +1544,11 @@ function boot() {
   map.renderBlocklist(state.blocklist);
   updateOnline();
 
+  const shared = parseSharedRoute(location.hash);
+  if (shared) history.replaceState(null, '', location.pathname + location.search);
   const last = store.load(store.KEYS.lastRoute);
-  if (last?.route?.points && Date.now() - (last.route.createdAt || 0) < 24 * 3600 * 1000) {
+  if (shared) loadSharedRoute(shared);
+  else if (last?.route?.points && Date.now() - (last.route.createdAt || 0) < 24 * 3600 * 1000) {
     state.dest = last.dest;
     state.destLabel = last.destLabel || '';
     state.start = last.start || null;

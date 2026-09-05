@@ -80,7 +80,7 @@ export class MapView {
     });
     this.map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
     this.tilesId = tiles;
-    this.data = { route: [], done: [], ahead: [], blocks: EMPTY, highlight: [], preview: EMPTY, accuracy: EMPTY };
+    this.data = { route: [], done: [], ahead: [], blocks: EMPTY, highlight: [], preview: EMPTY, accuracy: EMPTY, grades: EMPTY };
     this.markers = {};
     this.follow = false;
     this.courseUp = true;
@@ -91,6 +91,7 @@ export class MapView {
     this.onTap = () => {};
     this.onBlockTap = () => {};
     this.onResultTap = () => {};
+    this.onPoiTap = () => {};
     this.onBearing = () => {};
     this.suppressClickUntil = 0;
     this.blockMode = false;
@@ -128,6 +129,7 @@ export class MapView {
     src('highlight', fc(this.data.highlight.length ? [lineFeature(this.data.highlight)] : []));
     src('preview', this.data.preview || EMPTY);
     src('me-accuracy', this.data.accuracy || EMPTY);
+    src('route-grades', this.data.grades || EMPTY);
 
     // Draw under labels but above roads/buildings.
     const before = m.getStyle().layers.find((l) => l.type === 'symbol')?.id;
@@ -138,6 +140,11 @@ export class MapView {
     line('route-casing', 'route-casing', { 'line-color': '#ffffff', 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 6, 17, 13], 'line-opacity': 0.9 });
     line('route-done', 'route-done', { 'line-color': '#94a3b8', 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 3.5, 17, 8] });
     line('route-ahead', 'route-ahead', { 'line-color': '#1d4ed8', 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 3.5, 17, 8] });
+    // Planned route coloured by bike-friendliness grade (hidden while navigating).
+    line('route-grades', 'route-grades', {
+      'line-color': ['match', ['get', 'grade'], 'A', '#16a34a', 'B', '#84cc16', 'C', '#f59e0b', 'D', '#ea580c', 'E', '#dc2626', '#1d4ed8'],
+      'line-width': ['interpolate', ['linear'], ['zoom'], 12, 3.5, 17, 8],
+    });
     line('highlight', 'highlight', { 'line-color': '#f59e0b', 'line-width': 9, 'line-opacity': 0.85 });
     if (!m.getLayer('me-accuracy')) {
       m.addLayer({ id: 'me-accuracy', type: 'fill', source: 'me-accuracy', paint: { 'fill-color': '#1d4ed8', 'fill-opacity': 0.12 } }, before);
@@ -322,6 +329,13 @@ export class MapView {
     this.setSource('route-casing', fc(points?.length ? [lineFeature(points)] : []));
     this.setSource('route-ahead', fc(points?.length ? [lineFeature(points)] : []));
     this.setSource('route-done', EMPTY);
+    if (!points?.length) this.setRouteGrades(null);
+  }
+
+  /** Colour the planned route by grade runs [{grade, points}]; null clears. */
+  setRouteGrades(runs) {
+    this.data.grades = fc((runs || []).map((r) => lineFeature(r.points, { grade: r.grade })));
+    this.setSource('route-grades', this.data.grades);
   }
 
   /** Split the route at the snapped position: grey behind, blue ahead. */
@@ -397,6 +411,28 @@ export class MapView {
     ];
     const f = this.map.queryRenderedFeatures(box, { layers })[0];
     return f ? this.entries?.find((e) => e.id === f.properties.id) || null : null;
+  }
+
+  // ------------------------------------------------------ places from tiles
+  /** Named point of interest under a screen point (from the tiles), or null. */
+  poiAt(point, { radius = 14 } = {}) {
+    const m = this.map;
+    const layers = (m.getStyle()?.layers || []).filter((l) => l['source-layer'] === 'poi' && m.getLayer(l.id)).map((l) => l.id);
+    if (!layers.length) return null;
+    const box = [
+      [point.x - radius, point.y - radius],
+      [point.x + radius, point.y + radius],
+    ];
+    let feats = [];
+    try {
+      feats = m.queryRenderedFeatures(box, { layers });
+    } catch {
+      return null;
+    }
+    const f = feats.find((x) => x.properties?.name && x.geometry?.type === 'Point');
+    if (!f) return null;
+    const [lon, lat] = f.geometry.coordinates;
+    return { name: f.properties.name, class: f.properties.class || null, subclass: f.properties.subclass || null, lat, lon };
   }
 
   // ---------------------------------------------------- roads from the tiles
@@ -480,6 +516,11 @@ export class MapView {
       const entry = this.blockFeatureAt(e.point);
       if (entry) {
         this.onBlockTap(entry);
+        return;
+      }
+      const poi = this.poiAt(e.point);
+      if (poi) {
+        this.onPoiTap(poi, { x: e.point.x, y: e.point.y });
         return;
       }
     }

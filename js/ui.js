@@ -4,6 +4,7 @@ import { formatDistance } from './geo.js';
 import { stepIcon } from './instructions.js';
 import { TILE_SOURCES } from './map.js';
 import { PROFILES } from './router.js';
+import { GRADES, GRADE_ORDER } from './rating.js';
 import { CROSSING_RULES } from './blocklist.js';
 
 export const $ = (id) => document.getElementById(id);
@@ -130,11 +131,53 @@ export function renderSteps(list, steps, units) {
     ...steps.map((s) =>
       el('li', {}, [
         el('span', { class: 'ico', text: stepIcon(s) }),
-        el('span', { class: 'txt', text: s.text }),
+        el('div', { class: 'txt' }, [
+          el('div', { text: s.text }),
+          s.rating
+            ? el('div', { class: 'road-rating' }, [
+                el('span', { class: 'grade', style: `background:${GRADES[s.rating.grade].color}`, text: s.rating.grade, title: GRADES[s.rating.grade].label }),
+                el('span', { class: 'kind', text: [s.rating.kind, ...s.rating.notes].join(' · ') }),
+                s.rating.signals || s.rating.stops
+                  ? el('span', { class: 'stops', text: [s.rating.signals ? `${s.rating.signals} ${s.rating.signals === 1 ? 'light' : 'lights'}` : null, s.rating.stops ? `${s.rating.stops} ${s.rating.stops === 1 ? 'stop' : 'stops'}` : null].filter(Boolean).join(', ') })
+                  : null,
+              ])
+            : null,
+        ]),
         el('span', { class: 'd', text: s.kind === 'arrive' ? '' : formatDistance(s.distToNext, units) }),
       ])
     )
   );
+}
+
+/** Stacked bar of the route by grade, with the overall grade and a legend. */
+export function renderComposition(container, comp, units) {
+  if (!comp || !comp.total) {
+    container.hidden = true;
+    return;
+  }
+  const bar = el(
+    'div',
+    { class: 'comp-bar', role: 'img', 'aria-label': 'Route by road type' },
+    GRADE_ORDER.filter((g) => comp.byGrade[g] > 0).map((g) =>
+      el('span', { style: `flex:${comp.byGrade[g]};background:${GRADES[g].color}`, title: `${GRADES[g].label}: ${formatDistance(comp.byGrade[g], units)}` })
+    )
+  );
+  const legend = el(
+    'div',
+    { class: 'comp-legend' },
+    GRADE_ORDER.filter((g) => comp.byGrade[g] > 0).map((g) =>
+      el('span', {}, [el('i', { style: `background:${GRADES[g].color}` }), `${GRADES[g].label} ${Math.round((100 * comp.byGrade[g]) / comp.total)}%`])
+    )
+  );
+  container.replaceChildren(
+    el('div', { class: 'row between comp-head' }, [
+      el('span', {}, [el('span', { class: 'grade', style: `background:${GRADES[comp.grade].color}`, text: comp.grade }), ` Bike-friendliness`]),
+      el('span', { class: 'sub', text: `${Math.round(comp.friendlyShare * 100)}% on paths & quiet streets` }),
+    ]),
+    bar,
+    legend
+  );
+  container.hidden = false;
 }
 
 function toggle(checked, onChange) {

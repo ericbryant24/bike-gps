@@ -89,6 +89,7 @@
     <!-- Long-press context menu -->
     <div id="ctx-menu" class="panel menu" hidden>
       <div id="ctx-title" class="menu-title">Dropped pin</div>
+      <div id="ctx-details" class="menu-details" hidden></div>
       <button data-act="dest">Route here</button>
       <button data-act="start">Start from here</button>
       <button data-act="block-road">Block this road</button>
@@ -109,11 +110,16 @@
         <button id="plan-close" class="icon-btn" aria-label="Clear route">✕</button>
       </div>
       <div class="chips" id="profile-chips"></div>
+      <div id="route-comp" hidden></div>
       <div id="plan-warning" class="warning" hidden></div>
+      <div id="shared-note" class="warning" hidden>
+        Shared route — it follows the sender's exact path. <button id="replan-own" class="text-btn">Re-plan with my blocks</button>
+      </div>
       <div class="row gap">
         <button id="start-nav" class="primary grow">Start</button>
         <button id="simulate-nav" class="secondary" title="Simulate riding this route">▶ Simulate</button>
         <button id="toggle-steps" class="secondary" aria-expanded="false">Steps</button>
+        <button id="share-route" class="secondary" title="Share this route" aria-label="Share route">⤴</button>
       </div>
       <ol id="steps-list" class="steps" hidden></ol>
     </section>
