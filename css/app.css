@@ -67,7 +67,7 @@ button { font: inherit; color: inherit; }
 .maplibregl-ctrl-attrib { background: var(--panel) !important; color: var(--muted) !important; font-size: 10px; border-radius: 10px 0 0 0; }
 .maplibregl-ctrl-attrib a { color: var(--accent) !important; }
 .maplibregl-ctrl-attrib.maplibregl-compact { margin: 0 !important; }
-.maplibregl-marker { will-change: transform; }
+.maplibregl-marker { will-change: transform; position: absolute; } /* never let a marker's own class override this */
 
 /* ---------- generic ---------- */
 .panel {
@@ -145,13 +145,13 @@ button:disabled { opacity: 0.5; cursor: default; }
   background: var(--panel); border-radius: 999px; padding: 8px 16px; font-size: 14px; box-shadow: var(--shadow);
 }
 .result-pin {
-  position: relative; width: 30px; height: 40px; border: 0; background: transparent; padding: 0; cursor: pointer;
+  width: 30px; height: 40px; border: 0; background: transparent; padding: 0; cursor: pointer;
 }
 .result-pin::before {
-  content: ""; position: absolute; left: 3px; top: 0; width: 24px; height: 24px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg);
-  background: var(--accent); border: 2px solid #fff; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  content: ""; position: absolute; left: 3px; top: 11px; width: 24px; height: 24px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg);
+  box-sizing: border-box; background: var(--accent); border: 2px solid #fff; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
 }
-.result-pin span { position: absolute; left: 0; top: 4px; width: 30px; text-align: center; color: var(--accent-fg); font-size: 12px; font-weight: 700; }
+.result-pin span { position: absolute; left: 0; top: 15px; width: 30px; text-align: center; color: var(--accent-fg); font-size: 12px; font-weight: 700; }
 
 .pill {
   position: absolute; z-index: 1000; top: calc(70px + var(--safe-top)); left: 50%; transform: translateX(-50%);
@@ -320,7 +320,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 @media (prefers-color-scheme: dark) { .toast { color: #0b1a1c; background: #e8eef0; } }
 
 /* ---------- map markers ---------- */
-.me-marker { position: relative; width: 22px; height: 22px; }
+.me-marker { width: 22px; height: 22px; }
 .me-marker .dot {
   position: absolute; inset: 0; border-radius: 50%; background: #1d4ed8; border: 3px solid #fff; box-shadow: 0 0 0 2px rgba(29, 78, 216, 0.35), 0 2px 6px rgba(0, 0, 0, 0.4);
 }
@@ -330,11 +330,16 @@ button:disabled { opacity: 0.5; cursor: default; }
   margin-left: -16px; margin-bottom: 8px;
 }
 .me-marker.stale .dot { background: #9ca3af; box-shadow: none; }
-.pin { position: relative; width: 28px; height: 40px; }
+/* Pins are anchored at the bottom-centre of their box, so the drawn tip must
+   sit exactly on the box's bottom edge or the pin appears offset from its
+   coordinate (visibly so when zoomed out). A 20 px square rotated 45° has its
+   corner 14.1 px below its centre: top = 40 - 14.1 - 10 ≈ 16 px. */
+.pin { width: 28px; height: 40px; }
 .pin::before {
-  content: ""; position: absolute; left: 4px; top: 0; width: 20px; height: 20px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg);
-  background: var(--pin, #dc2626); border: 2px solid #fff; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  content: ""; position: absolute; left: 4px; top: 16px; width: 20px; height: 20px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg);
+  box-sizing: border-box; background: var(--pin, #dc2626); border: 2px solid #fff; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
 }
+.pin::after { content: ""; position: absolute; left: 11px; bottom: -2px; width: 6px; height: 3px; border-radius: 50%; background: rgba(0, 0, 0, 0.35); }
 .pin.start { --pin: #16a34a; }
 .pin.dest { --pin: #dc2626; }
 .pin.drop { --pin: #6b7280; }
