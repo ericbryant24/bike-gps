@@ -44,7 +44,7 @@ const SHELL = [
 const TILE_HOSTS = /(^|\.)tile\.openstreetmap\.org$|tile-cyclosm\.openstreetmap\.fr$|basemaps\.cartocdn\.com$|^tiles\.openfreemap\.org$/;
 // Style JSON, TileJSON, sprites and glyphs: small, shared by every tile — keep fresh but serve instantly.
 const MAP_ASSET_PATH = /^\/(styles|sprites|fonts|planet$|natural_earth\/[^/]+$)/;
-const API_HOSTS = /brouter\.de$|nominatim\.openstreetmap\.org$|photon\.komoot\.io$|overpass/;
+const API_HOSTS = /brouter\.de$|nominatim\.openstreetmap\.org$|photon\.komoot\.io$|api\.mapbox\.com$|overpass/;
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

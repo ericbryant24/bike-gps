@@ -868,7 +868,7 @@ function importBlocklist() {
 // ------------------------------------------------------------------- search
 let searchTimer = null;
 let searchAbort = null;
-state.search = { query: '', results: [], center: null, zoom: null, anchor: null, committed: false };
+state.search = { query: '', results: [], center: null, zoom: null, anchor: null, committed: false, session: null };
 
 const RECENT_FIX_MS = 10 * 60 * 1000;
 const MAX_SHOWN_RESULTS = 15; // nearest N; more just clutters the map
@@ -903,24 +903,73 @@ async function searchAnchor() {
  * asked, fits the map to them.
  */
 function showResults(results, anchor, { commit = false, fit = false } = {}) {
-  for (const r of results) r.distance = distance(anchor, r);
-  results.sort((a, b) => a.distance - b.distance);
+  for (const r of results) if (Number.isFinite(r.lat) && Number.isFinite(r.lon)) r.distance = distance(anchor, r);
+  results.sort((a, b) => (a.distance ?? Infinity) - (b.distance ?? Infinity));
   results = results.slice(0, MAX_SHOWN_RESULTS);
   state.search.results = results;
   state.search.anchor = anchor;
   state.search.committed = commit;
   renderSearchResults($('search-results'), results, pickPlace, { units: units(), numbered: commit });
   if (!commit) return;
-  map.setSearchResults(results);
-  if (fit && results.length > 1) {
-    map.fitPoints(results, { top: 90 + ($('search-results').offsetHeight || 0), bottom: $('sheet').hidden ? 40 : $('sheet').offsetHeight, side: 40 });
-  } else if (fit && results.length === 1) map.setView(results[0], Math.max(map.zoom, 15));
+  map.setSearchResults(results.filter((r) => Number.isFinite(r.lat)));
+  const located = results.filter((r) => Number.isFinite(r.lat));
+  if (fit && located.length > 1) {
+    map.fitPoints(located, { top: 90 + ($('search-results').offsetHeight || 0), bottom: $('sheet').hidden ? 40 : $('sheet').offsetHeight, side: 40 });
+  } else if (fit && located.length === 1) map.setView(located[0], Math.max(map.zoom, 15));
   // Record the resting camera once any fit animation ends, so "Search this
   // area" only appears after the *user* moves the map.
   state.search.settling = fit;
   state.search.center = map.center;
   state.search.zoom = map.zoom;
   $('search-here').hidden = true;
+}
+
+const mapboxToken = () => (state.settings.mapboxToken || '').trim();
+function mapboxSession() {
+  if (!state.search.session) state.search.session = crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+  return state.search.session;
+}
+
+/** Mapbox path: suggest while typing (names + distance), forward on commit (coordinates). */
+async function runMapboxSearch(q, anchor, { fromInput, ctrl }) {
+  const token = mapboxToken();
+  try {
+    if (fromInput) {
+      const hits = await geocode.mapboxSuggest(q, { token, session: mapboxSession(), near: anchor, signal: ctrl.signal });
+      if (ctrl.signal.aborted) return;
+      showResults(hits, anchor, { commit: false });
+      return;
+    }
+    const hits = await geocode.mapboxForward(q, { token, near: anchor, signal: ctrl.signal });
+    if (ctrl.signal.aborted) return;
+    showResults(hits, anchor, { commit: true, fit: true });
+    if (!hits.length) toast('No places found near you.');
+  } catch (e) {
+    if (ctrl.signal.aborted) return;
+    if (e instanceof geocode.MapboxAuthError) {
+      toast(`${e.message} Using the free geocoder instead.`, { duration: 6000 });
+      return runOsmSearch(q, anchor, { fromInput, ctrl });
+    }
+    throw e;
+  }
+}
+
+async function runOsmSearch(q, anchor, { fromInput, ctrl }) {
+  let shown = false;
+  const present = (list, done) => {
+    if (ctrl.signal.aborted) return;
+    showResults(list, anchor, { commit: !fromInput, fit: !fromInput && !shown });
+    shown = shown || list.length > 0;
+    if (done && !fromInput) hidePill();
+  };
+  const [geo, osm] = await Promise.all([
+    geocode.search(q, { near: anchor, signal: ctrl.signal, onProgress: (list) => present(list, false) }),
+    overpass.placesNamed(q, anchor, { signal: ctrl.signal }),
+  ]);
+  if (ctrl.signal.aborted) return;
+  const results = mergePlaces(geo, osm);
+  present(results, true);
+  if (!results.length && !fromInput) toast('No places found near you.');
 }
 
 async function runSearch(q, { fromInput = false } = {}) {
@@ -932,8 +981,8 @@ async function runSearch(q, { fromInput = false } = {}) {
   }
   try {
     // Enter/Go on a query the live suggestions already fetched: commit those
-    // results instead of asking the geocoder again.
-    if (!fromInput && state.search.query === q && state.search.results.length && !state.search.committed) {
+    // results instead of asking the geocoder again (when they carry coordinates).
+    if (!fromInput && state.search.query === q && state.search.results.length && !state.search.committed && state.search.results.every((r) => Number.isFinite(r.lat))) {
       showResults(state.search.results, state.search.anchor || map.center, { commit: true, fit: true });
       return;
     }
@@ -941,6 +990,10 @@ async function runSearch(q, { fromInput = false } = {}) {
     const anchor = await searchAnchor();
     if (ctrl.signal.aborted) return;
     state.search.query = q;
+    if (mapboxToken()) {
+      await runMapboxSearch(q, anchor, { fromInput, ctrl });
+      return;
+    }
     let shown = false;
     const present = (list, done) => {
       if (ctrl.signal.aborted) return;
@@ -971,7 +1024,7 @@ async function searchHere() {
   $('search-here').hidden = true;
   pill('Searching this area…', { spinner: true });
   try {
-    const results = await geocode.searchInBounds(q, map.bounds);
+    const results = mapboxToken() ? await geocode.mapboxForward(q, { token: mapboxToken(), bounds: map.bounds, near: map.center }) : await geocode.searchInBounds(q, map.bounds);
     const anchor = state.lastFix && Date.now() - state.lastFix.timestamp < RECENT_FIX_MS ? state.lastFix : map.center;
     showResults(results, anchor, { commit: true, fit: false });
     if (!results.length) toast(`No "${q}" here.`);
@@ -997,7 +1050,7 @@ function maybeOfferSearchHere() {
 }
 
 function clearSearch() {
-  state.search = { query: '', results: [], center: null, zoom: null, anchor: null, committed: false };
+  state.search = { query: '', results: [], center: null, zoom: null, anchor: null, committed: false, session: null };
   map.setSearchResults([]);
   $('search-results').hidden = true;
   $('search-here').hidden = true;
@@ -1013,7 +1066,21 @@ function showRecents() {
   );
 }
 
-function pickPlace(place) {
+async function pickPlace(place) {
+  if (!Number.isFinite(place.lat) && place.mapboxId && mapboxToken()) {
+    pill('Locating…', { spinner: true });
+    try {
+      const full = await geocode.mapboxRetrieve(place.mapboxId, { token: mapboxToken(), session: mapboxSession() });
+      if (!full) throw new Error('Could not locate that place.');
+      place = { ...place, ...full, label: place.label };
+      state.search.session = null; // a session ends with a retrieve
+    } catch (e) {
+      reportError(e, 'Could not locate that place');
+      return;
+    } finally {
+      hidePill();
+    }
+  }
   $('search-results').hidden = true;
   $('search').value = place.label;
   $('search-clear').hidden = false;
@@ -1383,6 +1450,13 @@ function openSettings() {
         updateCompass();
       }
       if (key === 'endpoint' && state.route) planRoute();
+      if (key === 'mapboxToken' && value) {
+        pill('Checking Mapbox token…', { spinner: true });
+        geocode.mapboxCheckToken(value).then((r) => {
+          hidePill();
+          toast(r.ok ? 'Mapbox search is on.' : `Mapbox token problem: ${r.message}`, { duration: 6000 });
+        });
+      } else if (key === 'mapboxToken') toast('Mapbox search off — using the free geocoders.');
     },
     {
       version: self.APP_VERSION,

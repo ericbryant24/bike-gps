@@ -19,6 +19,7 @@ No build step, no API keys, no backend: it's static HTML/CSS/JS that deploys str
 - **Road ratings**: every stretch of a planned route is graded A–E for bike-friendliness from its OpenStreetMap tags (separated path → quiet street → moderate → busy → major road, adjusted for bike lanes, protected lanes, signed cycle routes, speed limits and unpaved surfaces). The route is coloured by grade on the map, the summary shows a composition bar and overall grade, and each turn-by-turn step shows its road's grade, description and the lights/stops on it.
 - **Tap a place on the map** (shop, park, café… from the tile data) to see its type, distance, address, hours and contact where available, and route to it.
 - **Share a route**: the link carries the route's own geometry, so the recipient sees the exact path (not one re-planned with their blocks) and can navigate it; one tap re-plans with their own blocks. GPX export for other devices.
+- **Optional Mapbox search**: paste a Mapbox public token in Settings and search switches to the Mapbox Search Box API (fuzzy, relevance+proximity ranked, fresh POI data). Without a token, the free OpenStreetMap geocoders are used.
 - **Search** anchored to *your location* regardless of where the map is: suggestions appear as you type without moving the map; Enter/Go sorts results by distance from you, drops numbered pins and fits them into view; "Search this area" (after you pan) is the only search that uses the visible map instead.
 - **Automatic rerouting** when you leave the route, with GPS-glitch tolerance.
 - **Ride simulator** to preview guidance (and rerouting) without leaving your desk.
@@ -77,6 +78,10 @@ vendor/maplibre/      MapLibre GL JS 5.24 (vendored for offline use)
 scripts/              dev server, icon generator
 test/                 node --test suites (+ a real BRouter response fixture)
 ```
+
+## Optional: Mapbox search
+
+Search uses free OpenStreetMap geocoders by default. For Google-quality place search, create a free Mapbox account, make a **public** token (`pk.…`) with the default scopes, restrict it to your site's URL (e.g. `https://<user>.github.io/bike-gps/*`), and paste it in **Settings → Mapbox search token**. The token is stored only on that device. Mapbox's free tier (tens of thousands of search sessions per month) comfortably covers personal use; the app uses one *suggest* session per query while typing plus one *retrieve* or *forward* request when you commit.
 
 ## Services used
 
