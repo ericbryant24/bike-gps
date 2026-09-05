@@ -6,15 +6,17 @@ const MIN_GAP_MS = 1100;
 let lastAt = 0;
 let chain = Promise.resolve();
 
+/** Serialise requests so two searches never overlap; spacing is applied per request. */
 function throttled(fn) {
-  const run = chain.then(async () => {
-    const wait = lastAt + MIN_GAP_MS - Date.now();
-    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-    lastAt = Date.now();
-    return fn();
-  });
+  const run = chain.then(fn);
   chain = run.catch(() => {});
   return run;
+}
+
+async function spaced() {
+  const wait = lastAt + MIN_GAP_MS - Date.now();
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  lastAt = Date.now();
 }
 
 /** "39.96, -83.00" or "39.96 -83.00" → {lat, lon} or null. */
@@ -42,7 +44,11 @@ function formatResult(r) {
   };
 }
 
+/** One request, never closer than MIN_GAP_MS to the previous one. */
 async function nominatim(params, { signal, fetchImpl }) {
+  const wait = lastAt + MIN_GAP_MS - Date.now();
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  lastAt = Date.now();
   const res = await fetchImpl(`${ENDPOINT}/search?${params}`, {
     signal,
     headers: { Accept: 'application/json', 'Accept-Language': globalThis.navigator?.language || 'en' },
@@ -84,7 +90,6 @@ export async function search(query, { near, radiusKm = 30, limit = 10, signal, f
       results = await nominatim(p, { signal, fetchImpl });
     }
     if (results.length < 3) {
-      await new Promise((r) => setTimeout(r, MIN_GAP_MS));
       const p = baseParams(q, limit);
       if (near) p.set('viewbox', viewbox({ minLon: near.lon - 0.5, maxLon: near.lon + 0.5, minLat: near.lat - 0.5, maxLat: near.lat + 0.5 }));
       results = dedupe([...results, ...(await nominatim(p, { signal, fetchImpl }))]);
@@ -109,6 +114,7 @@ export async function searchInBounds(query, bounds, { limit = 12, signal, fetchI
 export async function reverse(point, { signal, fetchImpl = globalThis.fetch } = {}) {
   try {
     return await throttled(async () => {
+      await spaced();
       const params = new URLSearchParams({ lat: String(point.lat), lon: String(point.lon), format: 'jsonv2', zoom: '18' });
       const res = await fetchImpl(`${ENDPOINT}/reverse?${params}`, {
         signal,

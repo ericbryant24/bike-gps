@@ -671,6 +671,9 @@ function showResults(results, { fit = true } = {}) {
   if (fit && results.length > 1) {
     map.fitPoints(results, { top: 90 + ($('search-results').offsetHeight || 0), bottom: $('sheet').hidden ? 40 : $('sheet').offsetHeight, side: 40 });
   } else if (fit && results.length === 1) map.setView(results[0], Math.max(map.zoom, 15));
+  // Record the resting camera once the fit animation ends, so the button
+  // only appears after the *user* moves the map.
+  state.search.settling = true;
   state.search.center = map.center;
   state.search.zoom = map.zoom;
   $('search-here').hidden = true;
@@ -705,7 +708,7 @@ async function searchHere() {
   try {
     const results = await geocode.searchInBounds(q, map.bounds);
     showResults(results, { fit: false });
-    state.search.center = map.center;
+    state.search.settling = false;
     if (!results.length) toast(`No "${q}" here.`);
   } catch (e) {
     reportError(e, 'Search failed');
@@ -717,6 +720,12 @@ async function searchHere() {
 function maybeOfferSearchHere() {
   const s = state.search;
   if (!s.query || !s.center || state.mode === 'navigating') return;
+  if (s.settling) {
+    s.settling = false;
+    s.center = map.center;
+    s.zoom = map.zoom;
+    return;
+  }
   const moved = distance(s.center, map.center);
   const viewport = distance({ lat: map.bounds.minLat, lon: map.bounds.minLon }, { lat: map.bounds.maxLat, lon: map.bounds.maxLon });
   $('search-here').hidden = !(moved > viewport * 0.25 || Math.abs(map.zoom - s.zoom) > 1.2);

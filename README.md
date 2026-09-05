@@ -14,7 +14,9 @@ No build step, no API keys, no backend: it's static HTML/CSS/JS that deploys str
   - *Stretch*: tap two points; the stretch of road between them is traced along the road network and blocked.
   - *Spot*: a circle nothing may pass through (a dangerous junction, a flooded underpass…).
   - *Avoid this road* while navigating: blocks the road you're on and reroutes instantly.
+  - **Crossing rule** per block: *only at traffic lights* (default) or *at any intersection*.
   - Entries can be toggled, renamed, resized, exported/imported as JSON, and are stored on-device.
+- **Search** that sorts results by distance from you, shows them as numbered pins on the map, and offers "Search this area" after you pan.
 - **Automatic rerouting** when you leave the route, with GPS-glitch tolerance.
 - **Ride simulator** to preview guidance (and rerouting) without leaving your desk.
 - **Offline-capable PWA**: app shell cached, recently viewed map tiles + fonts/sprites cached (LRU), last route restored on launch, screen wake-lock while navigating, install prompt.
@@ -23,6 +25,8 @@ No build step, no API keys, no backend: it's static HTML/CSS/JS that deploys str
 ## How blocking works
 
 BRouter supports "no-go" areas, but a no-go polyline drawn along a road would also block *crossing* that road, because any way segment touching it is forbidden. Instead, Bike GPS fences a blocked road with short **perpendicular gates** placed between junctions (junction positions come from OpenStreetMap via Overpass). Riding along the road must pass through a gate, so it's impossible; crossing at a junction never touches one. Spots use plain circular no-go areas.
+
+Each blocked road has a **crossing rule**. With *only at traffic lights* (the default), every junction along the road that has no `highway=traffic_signals` node nearby is additionally closed with a 5 m no-go circle, so the router can only cross where there's a light. T-junctions where the blocked road ends are left open, since there's nothing to cross there. *At any intersection* skips the circles.
 
 Only the blocklist entries near the route's bounding box are sent with each routing request, simplified and capped so the request stays small. Blocks within 150 m of the start and destination are lifted for that request, so you can always ride off a blocked road you're standing on (or reach a destination on one).
 
