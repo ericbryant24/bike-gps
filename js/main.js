@@ -33,6 +33,7 @@ const state = {
   wakeLock: null,
   installPrompt: null,
   planAbort: null,
+  pending: null,
 };
 
 const voice = new Voice({ enabled: state.settings.voice });
@@ -445,31 +446,79 @@ function addEntry(entry, { replan = true } = {}) {
   }
 }
 
+// ---- block preview: nothing is added until the user confirms ---------------
+function activeChip(containerId, attr, fallback) {
+  const c = $(containerId).querySelector('.chip.active');
+  return c ? Number(c.dataset[attr]) : fallback;
+}
+
+function showPreview(draft, ctx = {}) {
+  state.pending = { draft, ...ctx };
+  map.setPreview(draft);
+  $('block-kind').hidden = true;
+  $('block-hint').hidden = true;
+  $('stretch-actions').hidden = true;
+  $('block-preview').hidden = false;
+  $('preview-name').value = draft.name;
+  $('preview-range').hidden = draft.kind !== 'road';
+  $('preview-radius').hidden = draft.kind !== 'point';
+  $('preview-cross-row').hidden = draft.kind === 'point';
+  const sel = $('preview-crossing');
+  sel.replaceChildren(...Object.entries(bl.CROSSING_RULES).map(([v, label]) => el('option', { value: v, selected: (draft.crossing || state.settings.crossing) === v, text: label })));
+  renderPreviewMeta();
+  if (draft.kind !== 'point') {
+    map.fitPoints(draft.lines.flat(), { top: $('block-toolbar').offsetHeight + 90, bottom: 40, side: 40 });
+  }
+}
+
+function renderPreviewMeta() {
+  const p = state.pending;
+  if (!p) return;
+  const d = p.draft;
+  let text;
+  if (d.kind === 'point') text = `${Math.round(d.radius)} m circle — nothing may pass through it.`;
+  else {
+    const junctions = bl.crossableJunctions(d).length;
+    const lights = (d.signals || []).length;
+    text = `${formatDistance(d.length || 0, units())}${d.lines.length > 1 ? ` · ${d.lines.length} sections` : ''} · ${junctions} ${junctions === 1 ? 'junction' : 'junctions'} · ${lights} traffic ${lights === 1 ? 'light' : 'lights'}`;
+  }
+  if (p.note) text += ` · ${p.note}`;
+  $('preview-meta').textContent = text;
+}
+
+function cancelPreview() {
+  if (!state.pending) return;
+  state.pending = null;
+  map.setPreview(null);
+  $('block-preview').hidden = true;
+  $('block-kind').hidden = false;
+  $('block-hint').hidden = false;
+  if (state.blockMode === 'stretch') resetStretch();
+}
+
+function confirmPreview() {
+  const p = state.pending;
+  if (!p) return;
+  const draft = p.draft;
+  draft.name = $('preview-name').value.trim() || draft.name;
+  if (draft.kind !== 'point') draft.crossing = $('preview-crossing').value;
+  cancelPreview();
+  addEntry(draft);
+}
+
 async function blockRoadAt(p) {
+  if (state.blockMode !== 'road') setBlockMode('road');
+  cancelPreview();
   pill('Looking up the road…', { spinner: true });
   map.setDrop(p);
   try {
-    const ways = await overpass.roadsAt(p, { radius: 18, timeoutMs: 12000 });
+    const ways = await overpass.roadsAt(p, { radius: 18, timeoutMs: 8000 });
     const way = ways[0];
     if (!way || way.dist > 25) {
       toast('No road there. Tap closer to a road, or block a spot instead.');
       return;
     }
-    let entry;
-    try {
-      if (way.name) {
-        const { ways: named, junctions, signals } = await overpass.roadByName(way.name, p, { timeoutMs: 12000 });
-        entry = bl.createRoad((named.length ? named : [way]).map((w) => w.points), { name: way.name, junctions, signals, crossing: state.settings.crossing });
-      } else {
-        const { ways: found, junctions, signals } = await overpass.wayWithJunctions(way.id, { timeoutMs: 12000 });
-        entry = bl.createRoad([(found[0] || way).points], { name: overpass.describeWay(way), junctions, signals, crossing: state.settings.crossing });
-      }
-    } catch {
-      // Couldn't fetch the rest of the road: block the tapped way on its own.
-      entry = bl.createRoad([way.points], { name: overpass.describeWay(way), crossing: state.settings.crossing });
-      toast('Only this section could be looked up right now.', { duration: 3000 });
-    }
-    addEntry(entry);
+    await previewRoad(way, p, activeChip('preview-range', 'km', 5));
   } catch (e) {
     reportError(e, 'Could not look up that road');
   } finally {
@@ -478,8 +527,32 @@ async function blockRoadAt(p) {
   }
 }
 
+/** Build (or rebuild, for a new range) the whole-road draft and show it. */
+async function previewRoad(way, tap, rangeKm) {
+  pill(`Loading ${way.name || 'road'} within ${rangeKm} km…`, { spinner: true });
+  let draft;
+  let note = null;
+  try {
+    if (way.name) {
+      const { ways: named, junctions, signals } = await overpass.roadByName(way.name, tap, { radius: rangeKm * 1000, timeoutMs: 20000 });
+      draft = bl.createRoad((named.length ? named : [way]).map((w) => w.points), { name: way.name, junctions, signals, crossing: state.settings.crossing });
+    } else {
+      const { ways: found, junctions, signals } = await overpass.wayWithJunctions(way.id, { timeoutMs: 20000 });
+      draft = bl.createRoad([(found[0] || way).points], { name: overpass.describeWay(way), junctions, signals, crossing: state.settings.crossing });
+    }
+  } catch {
+    draft = bl.createRoad([way.points], { name: overpass.describeWay(way), crossing: state.settings.crossing });
+    note = 'map data is busy, so only the tapped section loaded — pick a range to retry';
+  } finally {
+    hidePill();
+  }
+  showPreview(draft, { way, tap, rangeKm, note });
+}
+
 function blockSpotAt(p) {
-  addEntry(bl.createPoint(p));
+  if (state.blockMode !== 'point') setBlockMode('point');
+  cancelPreview();
+  showPreview(bl.createPoint(p, { radius: activeChip('preview-radius', 'm', bl.DEFAULT_POINT_RADIUS) }));
 }
 
 async function stretchTap(p) {
@@ -490,15 +563,17 @@ async function stretchTap(p) {
     $('block-hint').textContent = 'Now tap where the blocked stretch should end.';
     $('stretch-actions').hidden = false;
     try {
-      const ways = await overpass.roadsAt(p, { radius: 18 });
-      if (ways[0] && ways[0].dist < 25) map.setHighlight(ways[0].points);
+      const ways = await overpass.roadsAt(p, { radius: 18, timeoutMs: 6000 });
+      if (ways[0] && ways[0].dist < 25 && state.stretchPick === pick) map.setHighlight(ways[0].points);
     } catch {
       /* highlight is optional */
     }
     return;
   }
   const [a, b] = pick.points;
-  resetStretch();
+  state.stretchPick = null;
+  map.setHighlight(null);
+  $('stretch-actions').hidden = true;
   pill('Tracing the stretch…', { spinner: true });
   try {
     // Route between the two taps on the road network: that path IS the stretch.
@@ -506,15 +581,18 @@ async function stretchTap(p) {
     let name = 'Blocked stretch';
     let junctions = [];
     let signals = [];
+    let note = null;
     try {
-      const along = await overpass.waysAlong(path.points);
+      // Junction/light data is a bonus; don't hold the preview hostage to it.
+      const along = await Promise.race([overpass.waysAlong(path.points), new Promise((_, rej) => setTimeout(() => rej(new Error('slow')), 6000))]);
       junctions = along.junctions;
       signals = along.signals;
       name = describeStretch(along.ways) || name;
     } catch {
-      /* junctions optional */
+      note = 'map data is busy, so junctions and lights could not be loaded';
     }
-    addEntry(bl.createStretch(path.points, { name, junctions, signals, crossing: state.settings.crossing }));
+    hidePill();
+    showPreview(bl.createStretch(path.points, { name, junctions, signals, crossing: state.settings.crossing }), { note });
   } catch (e) {
     reportError(e, 'Could not trace that stretch');
   } finally {
@@ -539,15 +617,16 @@ function resetStretch() {
 }
 
 const BLOCK_HINTS = {
-  road: 'Tap a road to block every part of it with that name nearby.',
+  road: 'Tap a road to preview blocking every part of it with that name nearby.',
   stretch: 'Tap where the blocked stretch should start.',
-  point: 'Tap the map to block a spot (30 m circle, adjustable later).',
+  point: 'Tap the map to place a no-go circle.',
 };
 
 function setBlockMode(kind) {
   const entering = !!kind && !state.blockMode;
   const leaving = !kind && !!state.blockMode;
   state.blockMode = kind;
+  cancelPreview();
   resetStretch();
   $('block-toolbar').hidden = !kind;
   map.setBlockMode(!!kind);
@@ -655,25 +734,44 @@ function importBlocklist() {
 // ------------------------------------------------------------------- search
 let searchTimer = null;
 let searchAbort = null;
-state.search = { query: '', results: [], center: null, zoom: null };
+state.search = { query: '', results: [], center: null, zoom: null, anchor: null, committed: false };
 
-function referencePoint() {
-  return state.lastFix && Date.now() - state.lastFix.timestamp < 10 * 60 * 1000 ? state.lastFix : map.center;
+const RECENT_FIX_MS = 10 * 60 * 1000;
+
+/**
+ * Where "near me" is: the rider's location, refreshed quietly when the last
+ * fix is stale. The map centre is only used when no location is available
+ * at all, so panning the map never changes what a search means.
+ */
+async function searchAnchor() {
+  if (state.lastFix && Date.now() - state.lastFix.timestamp < RECENT_FIX_MS) return state.lastFix;
+  try {
+    return await currentPosition({ silent: true, maxAgeMs: RECENT_FIX_MS });
+  } catch {
+    return state.lastFix || map.center;
+  }
 }
 
-function showResults(results, { fit = true } = {}) {
-  const ref = referencePoint();
-  for (const r of results) r.distance = distance(ref, r);
+/**
+ * Show results. Live suggestions (`commit: false`) only update the list; a
+ * committed search (Enter / Go / Search this area) also places pins and, when
+ * asked, fits the map to them.
+ */
+function showResults(results, anchor, { commit = false, fit = false } = {}) {
+  for (const r of results) r.distance = distance(anchor, r);
   results.sort((a, b) => a.distance - b.distance);
   state.search.results = results;
-  renderSearchResults($('search-results'), results, pickPlace, { units: units(), numbered: true });
+  state.search.anchor = anchor;
+  state.search.committed = commit;
+  renderSearchResults($('search-results'), results, pickPlace, { units: units(), numbered: commit });
+  if (!commit) return;
   map.setSearchResults(results);
   if (fit && results.length > 1) {
     map.fitPoints(results, { top: 90 + ($('search-results').offsetHeight || 0), bottom: $('sheet').hidden ? 40 : $('sheet').offsetHeight, side: 40 });
   } else if (fit && results.length === 1) map.setView(results[0], Math.max(map.zoom, 15));
-  // Record the resting camera once the fit animation ends, so the button
-  // only appears after the *user* moves the map.
-  state.search.settling = true;
+  // Record the resting camera once any fit animation ends, so "Search this
+  // area" only appears after the *user* moves the map.
+  state.search.settling = fit;
   state.search.center = map.center;
   state.search.zoom = map.zoom;
   $('search-here').hidden = true;
@@ -687,12 +785,20 @@ async function runSearch(q, { fromInput = false } = {}) {
     return;
   }
   try {
-    if (!fromInput) pill('Searching…', { spinner: true });
-    const results = await geocode.search(q, { near: referencePoint(), signal: ctrl.signal });
+    // Enter/Go on a query the live suggestions already fetched: commit those
+    // results instead of asking the geocoder again.
+    if (!fromInput && state.search.query === q && state.search.results.length && !state.search.committed) {
+      showResults(state.search.results, state.search.anchor || map.center, { commit: true, fit: true });
+      return;
+    }
+    if (!fromInput) pill('Searching near you…', { spinner: true });
+    const anchor = await searchAnchor();
+    if (ctrl.signal.aborted) return;
+    const results = await geocode.search(q, { near: anchor, signal: ctrl.signal });
     if (ctrl.signal.aborted) return;
     state.search.query = q;
-    showResults(results, { fit: !fromInput || results.length > 0 });
-    if (!results.length && !fromInput) toast('No places found.');
+    showResults(results, anchor, { commit: !fromInput, fit: !fromInput });
+    if (!results.length && !fromInput) toast('No places found near you.');
   } catch (e) {
     if (!fromInput) reportError(e, 'Search failed');
   } finally {
@@ -707,8 +813,8 @@ async function searchHere() {
   pill('Searching this area…', { spinner: true });
   try {
     const results = await geocode.searchInBounds(q, map.bounds);
-    showResults(results, { fit: false });
-    state.search.settling = false;
+    const anchor = state.lastFix && Date.now() - state.lastFix.timestamp < RECENT_FIX_MS ? state.lastFix : map.center;
+    showResults(results, anchor, { commit: true, fit: false });
     if (!results.length) toast(`No "${q}" here.`);
   } catch (e) {
     reportError(e, 'Search failed');
@@ -732,7 +838,7 @@ function maybeOfferSearchHere() {
 }
 
 function clearSearch() {
-  state.search = { query: '', results: [], center: null, zoom: null };
+  state.search = { query: '', results: [], center: null, zoom: null, anchor: null, committed: false };
   map.setSearchResults([]);
   $('search-results').hidden = true;
   $('search-here').hidden = true;
@@ -784,7 +890,10 @@ map.onTap = (p) => {
   if (!state.blockMode) return;
   if (state.blockMode === 'road') blockRoadAt(p);
   else if (state.blockMode === 'point') blockSpotAt(p);
-  else if (state.blockMode === 'stretch') stretchTap(p);
+  else if (state.blockMode === 'stretch') {
+    if (state.pending) cancelPreview();
+    stretchTap(p);
+  }
 };
 map.onBlockTap = (entry) => {
   if (state.blockMode || state.mode === 'navigating') return;
@@ -820,9 +929,11 @@ $('ctx-menu').addEventListener('click', (e) => {
     else toast('Start set. Now search for or long-press a destination.');
   } else if (act === 'block-road') {
     map.setDrop(null);
+    setBlockMode('road');
     blockRoadAt(p);
   } else if (act === 'block-spot') {
     map.setDrop(null);
+    setBlockMode('point');
     blockSpotAt(p);
   } else map.setDrop(null);
 });
@@ -920,6 +1031,29 @@ $('block-kind').addEventListener('click', (e) => {
   if (kind) setBlockMode(kind);
 });
 $('stretch-reset').addEventListener('click', resetStretch);
+$('preview-confirm').addEventListener('click', confirmPreview);
+$('preview-discard').addEventListener('click', cancelPreview);
+$('preview-range').addEventListener('click', async (e) => {
+  const chip = e.target.closest('.chip');
+  if (!chip || !state.pending?.way) return;
+  for (const c of $('preview-range').querySelectorAll('.chip')) c.classList.toggle('active', c === chip);
+  const { way, tap } = state.pending;
+  await previewRoad(way, tap, Number(chip.dataset.km));
+});
+$('preview-radius').addEventListener('click', (e) => {
+  const chip = e.target.closest('.chip');
+  if (!chip || state.pending?.draft.kind !== 'point') return;
+  for (const c of $('preview-radius').querySelectorAll('.chip')) c.classList.toggle('active', c === chip);
+  state.pending.draft.radius = Number(chip.dataset.m);
+  map.setPreview(state.pending.draft);
+  renderPreviewMeta();
+});
+$('preview-crossing').addEventListener('change', (e) => {
+  if (state.pending?.draft && state.pending.draft.kind !== 'point') {
+    state.pending.draft.crossing = e.target.value;
+    renderPreviewMeta();
+  }
+});
 
 $('layers-btn').addEventListener('click', () => {
   const body = el(

@@ -187,7 +187,18 @@ button:disabled { opacity: 0.5; cursor: default; }
 /* ---------- block toolbar & context menu ---------- */
 #block-toolbar {
   position: absolute; z-index: 1001; left: 10px; right: 10px; top: calc(72px + var(--safe-top)); padding: 12px 14px;
+  max-height: calc(60dvh); overflow: auto;
 }
+#block-preview { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 10px; }
+.preview-name {
+  width: 100%; font: inherit; font-weight: 600; font-size: 16px; padding: 8px 10px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--panel-solid); color: var(--fg); margin-bottom: 4px;
+}
+.chip-label { align-self: center; margin-right: 2px; }
+#preview-cross-row select {
+  font: inherit; padding: 6px 10px; border-radius: 10px; border: 1px solid var(--border); background: var(--panel-solid); color: var(--fg); flex: 1;
+}
+#preview-meta { min-height: 18px; margin-bottom: 4px; }
 .menu { position: absolute; z-index: 1200; min-width: 220px; padding: 6px; }
 .menu .menu-title { padding: 8px 12px 6px; font-size: 12px; color: var(--muted); }
 .menu button {

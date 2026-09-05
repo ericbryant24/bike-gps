@@ -136,26 +136,44 @@ export async function roadsAt(point, { radius = 15, signal, timeoutMs } = {}) {
  * All ways sharing `name` within `radius` of a point, plus their junctions
  * with other roads. Used for "block the whole road".
  */
-// `.r` is the set of ways of interest; ways sharing any node with them are
-// fetched by node id (fast index lookup) so junctions can be derived.
-const ADJACENT =
-  'node(w.r)->.n;way(bn.n)[highway]->.all;.all out tags geom;' +
-  'node.n["highway"~"^(traffic_signals|crossing)$"]->.sig;.sig out;'; // lights on the road itself
+// `.r` is the set of ways of interest. Two ways to learn where they meet
+// other roads:
+//  LIGHT – junctions computed server-side (nodes of .r that also belong to
+//          other highway ways), returned as bare nodes. Small payload even
+//          for a 10 km road.
+//  HEAVY – every touching way with geometry; junctions derived client-side
+//          from shared coordinates. Used if LIGHT fails on a mirror.
+const SIGNALS = 'node.n["highway"~"^(traffic_signals|crossing)$"]->.sig;.sig out;';
+const LIGHT = `node(w.r)->.n;way(bn.n)[highway]->.all;(.all; - .r;)->.o;node(w.o)->.on;node.n.on->.j;.r out tags geom;.j out skel;${SIGNALS}`;
+const ADJACENT = `node(w.r)->.n;way(bn.n)[highway]->.all;.all out tags geom;${SIGNALS}`;
 
-export async function roadByName(name, near, { radius = 1500, signal, timeoutMs } = {}) {
-  const ql = `[out:json][timeout:25];way(around:${radius},${f6(near.lat)},${f6(near.lon)})[highway][name=${qstr(name)}]->.r;${ADJACENT}`;
-  const res = await query(ql, { signal, timeoutMs });
-  const all = parseWays(res);
-  const ways = all.filter((w) => w.name === name);
-  return { ways, junctions: sharedNodes(all), signals: parseSignals(res) };
+function bareNodes(res) {
+  return (res.elements || []).filter((e) => e.type === 'node' && !e.tags && Number.isFinite(e.lat)).map((e) => ({ lat: e.lat, lon: e.lon }));
+}
+
+/** Run `head` + LIGHT, falling back to `head` + ADJACENT. Returns { ways, junctions, signals }. */
+async function withJunctions(head, keep, opts) {
+  try {
+    const res = await query(`[out:json][timeout:25];${head}${LIGHT}`, opts);
+    const ways = parseWays(res).filter(keep);
+    if (!ways.length) return { ways, junctions: [], signals: parseSignals(res) };
+    return { ways, junctions: bareNodes(res), signals: parseSignals(res) };
+  } catch (e) {
+    if (opts?.signal?.aborted) throw e;
+    const res = await query(`[out:json][timeout:25];${head}${ADJACENT}`, opts);
+    const all = parseWays(res);
+    return { ways: all.filter(keep), junctions: sharedNodes(all), signals: parseSignals(res) };
+  }
+}
+
+export async function roadByName(name, near, { radius = 5000, signal, timeoutMs } = {}) {
+  const head = `way(around:${Math.round(radius)},${f6(near.lat)},${f6(near.lon)})[highway][name=${qstr(name)}]->.r;`;
+  return withJunctions(head, (w) => w.name === name, { signal, timeoutMs });
 }
 
 /** A single way by id, with its junctions. */
 export async function wayWithJunctions(wayId, { signal, timeoutMs } = {}) {
-  const ql = `[out:json][timeout:25];way(${wayId})->.r;${ADJACENT}`;
-  const res = await query(ql, { signal, timeoutMs });
-  const all = parseWays(res);
-  return { ways: all.filter((w) => w.id === wayId), junctions: sharedNodes(all), signals: parseSignals(res) };
+  return withJunctions(`way(${wayId})->.r;`, (w) => w.id === wayId, { signal, timeoutMs });
 }
 
 /**
@@ -164,15 +182,14 @@ export async function wayWithJunctions(wayId, { signal, timeoutMs } = {}) {
  */
 export async function waysAlong(line, { signal, radius = 2 } = {}) {
   const coords = line.map((p) => `${f6(p.lat)},${f6(p.lon)}`).join(',');
-  const ql = `[out:json][timeout:25];way(around:${radius},${coords})${ROUTABLE}->.r;${ADJACENT}`;
-  const res = await query(ql, { signal });
-  const all = parseWays(res);
+  const head = `way(around:${radius},${coords})${ROUTABLE}->.r;`;
+  const { ways, junctions, signals } = await withJunctions(head, () => true, { signal });
   // Score each way by how many line vertices lie on it.
-  for (const w of all) {
+  for (const w of ways) {
     const cum = cumulativeDistances(w.points);
     w.hits = line.reduce((n, p) => n + (snapToPath(p, w.points, cum, 0, w.points.length).dist < 3 ? 1 : 0), 0);
   }
-  return { ways: all.filter((w) => w.hits > 0).sort((a, b) => b.hits - a.hits), junctions: sharedNodes(all), signals: parseSignals(res) };
+  return { ways: ways.filter((w) => w.hits > 0).sort((a, b) => b.hits - a.hits), junctions, signals };
 }
 
 /**
