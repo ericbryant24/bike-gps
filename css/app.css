@@ -353,8 +353,8 @@ button:disabled { opacity: 0.5; cursor: default; }
 /* ---------- iOS install banner ---------- */
 .install-banner {
   position: absolute; z-index: 1900; left: 10px; right: 10px;
-  bottom: calc(var(--sheet-h) + 16px + var(--safe-bottom));
-  display: flex; align-items: center; gap: 12px; padding: 12px 8px 12px 14px; transition: bottom 0.2s;
+  bottom: calc(12px + var(--safe-bottom));
+  display: flex; align-items: center; gap: 12px; padding: 12px 8px 12px 14px;
   animation: rise 0.35s ease-out;
 }
 @keyframes rise { from { transform: translateY(20px); opacity: 0; } }

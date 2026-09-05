@@ -278,6 +278,7 @@ function renderSheet() {
   } else warn.hidden = true;
   renderSteps($('steps-list'), state.announceable, units());
   $('sheet').hidden = false;
+  $('install-banner').hidden = true;
 }
 
 // --------------------------------------------------------------- navigation
@@ -1288,7 +1289,7 @@ function maybeOfferIosInstall() {
   const hint = store.load(INSTALL_HINT_KEY);
   if (hint?.dismissedAt && Date.now() - hint.dismissedAt < 30 * 24 * 3600 * 1000) return;
   setTimeout(() => {
-    if (state.mode === 'idle' && !isStandalone()) $('install-banner').hidden = false;
+    if (state.mode === 'idle' && $('sheet').hidden && !isStandalone()) $('install-banner').hidden = false;
   }, 4000);
 }
 window.addEventListener('appinstalled', () => toast('Installed! Find Bike GPS on your home screen.'));
@@ -1334,7 +1335,7 @@ if ('serviceWorker' in navigator) {
 
 // ---------------------------------------------------------------------- boot
 function boot() {
-  trackSheetHeight($('sheet'), $('nav-bottom'));
+  trackSheetHeight($('sheet'), $('nav-bottom'), $('install-banner')); // controls float above whichever is showing
   $('blocklist-count').textContent = String(state.blocklist.length);
   map.renderBlocklist(state.blocklist);
   updateOnline();
