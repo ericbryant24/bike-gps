@@ -212,6 +212,7 @@ function clearRoute() {
   $('sheet').hidden = true;
   $('search').value = '';
   $('search-clear').hidden = true;
+  clearSearch();
   store.remove(store.KEYS.lastRoute);
 }
 
@@ -272,6 +273,7 @@ async function startNavigation({ simulate = false } = {}) {
 
   $('sheet').hidden = true;
   $('topbar').hidden = true;
+  $('search-here').hidden = true;
   $('block-toolbar').hidden = true;
   $('nav-hud').hidden = false;
   $('nav-offroute').hidden = true;
@@ -387,16 +389,18 @@ async function avoidRoadAhead() {
   pill('Blocking this road…', { spinner: true });
   let name = 'Road ahead';
   let junctions = [];
+  let signals = [];
   try {
     const along = await Promise.race([overpass.waysAlong(line), new Promise((_, rej) => setTimeout(() => rej(new Error('slow')), 4000))]);
     junctions = along.junctions;
+    signals = along.signals;
     name = describeStretch(along.ways) || name;
   } catch {
     /* fall back to the plain geometry */
   } finally {
     hidePill();
   }
-  const entry = bl.createStretch(line, { name, junctions });
+  const entry = bl.createStretch(line, { name, junctions, signals, crossing: state.settings.crossing });
   addEntry(entry, { replan: false });
   state.lastRerouteAt = 0;
   if (state.nav) {
@@ -454,15 +458,15 @@ async function blockRoadAt(p) {
     let entry;
     try {
       if (way.name) {
-        const { ways: named, junctions } = await overpass.roadByName(way.name, p, { timeoutMs: 12000 });
-        entry = bl.createRoad((named.length ? named : [way]).map((w) => w.points), { name: way.name, junctions });
+        const { ways: named, junctions, signals } = await overpass.roadByName(way.name, p, { timeoutMs: 12000 });
+        entry = bl.createRoad((named.length ? named : [way]).map((w) => w.points), { name: way.name, junctions, signals, crossing: state.settings.crossing });
       } else {
-        const { ways: found, junctions } = await overpass.wayWithJunctions(way.id, { timeoutMs: 12000 });
-        entry = bl.createRoad([(found[0] || way).points], { name: overpass.describeWay(way), junctions });
+        const { ways: found, junctions, signals } = await overpass.wayWithJunctions(way.id, { timeoutMs: 12000 });
+        entry = bl.createRoad([(found[0] || way).points], { name: overpass.describeWay(way), junctions, signals, crossing: state.settings.crossing });
       }
     } catch {
       // Couldn't fetch the rest of the road: block the tapped way on its own.
-      entry = bl.createRoad([way.points], { name: overpass.describeWay(way) });
+      entry = bl.createRoad([way.points], { name: overpass.describeWay(way), crossing: state.settings.crossing });
       toast('Only this section could be looked up right now.', { duration: 3000 });
     }
     addEntry(entry);
@@ -501,14 +505,16 @@ async function stretchTap(p) {
     const path = await fetchRoute({ endpoint: state.settings.endpoint, from: a, to: b, profile: 'shortest' });
     let name = 'Blocked stretch';
     let junctions = [];
+    let signals = [];
     try {
       const along = await overpass.waysAlong(path.points);
       junctions = along.junctions;
+      signals = along.signals;
       name = describeStretch(along.ways) || name;
     } catch {
       /* junctions optional */
     }
-    addEntry(bl.createStretch(path.points, { name, junctions }));
+    addEntry(bl.createStretch(path.points, { name, junctions, signals, crossing: state.settings.crossing }));
   } catch (e) {
     reportError(e, 'Could not trace that stretch');
   } finally {
@@ -590,9 +596,10 @@ function openBlocklistView() {
 
 function openEntryEditor(entry) {
   const body = renderEntryEditor(entry, units(), {
-    onSave: ({ name, radius }) => {
+    onSave: ({ name, radius, crossing }) => {
       entry.name = name;
       if (radius && entry.kind === 'point') entry.radius = Math.max(5, Math.min(500, radius));
+      if (crossing && bl.CROSSING_RULES[crossing]) entry.crossing = crossing;
       saveBlocklist();
       openBlocklistView();
       if (state.route && state.mode === 'idle') planRoute();
@@ -648,6 +655,30 @@ function importBlocklist() {
 // ------------------------------------------------------------------- search
 let searchTimer = null;
 let searchAbort = null;
+state.search = { query: '', results: [], center: null, zoom: null };
+
+function referencePoint() {
+  return state.lastFix && Date.now() - state.lastFix.timestamp < 10 * 60 * 1000 ? state.lastFix : map.center;
+}
+
+function showResults(results, { fit = true } = {}) {
+  const ref = referencePoint();
+  for (const r of results) r.distance = distance(ref, r);
+  results.sort((a, b) => a.distance - b.distance);
+  state.search.results = results;
+  renderSearchResults($('search-results'), results, pickPlace, { units: units(), numbered: true });
+  map.setSearchResults(results);
+  if (fit && results.length > 1) {
+    map.fitPoints(results, { top: 90 + ($('search-results').offsetHeight || 0), bottom: $('sheet').hidden ? 40 : $('sheet').offsetHeight, side: 40 });
+  } else if (fit && results.length === 1) map.setView(results[0], Math.max(map.zoom, 15));
+  // Record the resting camera once the fit animation ends, so the button
+  // only appears after the *user* moves the map.
+  state.search.settling = true;
+  state.search.center = map.center;
+  state.search.zoom = map.zoom;
+  $('search-here').hidden = true;
+}
+
 async function runSearch(q, { fromInput = false } = {}) {
   searchAbort?.abort();
   const ctrl = (searchAbort = new AbortController());
@@ -657,9 +688,10 @@ async function runSearch(q, { fromInput = false } = {}) {
   }
   try {
     if (!fromInput) pill('Searching…', { spinner: true });
-    const results = await geocode.search(q, { near: map.center, signal: ctrl.signal });
+    const results = await geocode.search(q, { near: referencePoint(), signal: ctrl.signal });
     if (ctrl.signal.aborted) return;
-    renderSearchResults($('search-results'), results, pickPlace);
+    state.search.query = q;
+    showResults(results, { fit: !fromInput || results.length > 0 });
     if (!results.length && !fromInput) toast('No places found.');
   } catch (e) {
     if (!fromInput) reportError(e, 'Search failed');
@@ -668,12 +700,51 @@ async function runSearch(q, { fromInput = false } = {}) {
   }
 }
 
+async function searchHere() {
+  const q = state.search.query;
+  if (!q) return;
+  $('search-here').hidden = true;
+  pill('Searching this area…', { spinner: true });
+  try {
+    const results = await geocode.searchInBounds(q, map.bounds);
+    showResults(results, { fit: false });
+    state.search.settling = false;
+    if (!results.length) toast(`No "${q}" here.`);
+  } catch (e) {
+    reportError(e, 'Search failed');
+  } finally {
+    hidePill();
+  }
+}
+
+function maybeOfferSearchHere() {
+  const s = state.search;
+  if (!s.query || !s.center || state.mode === 'navigating') return;
+  if (s.settling) {
+    s.settling = false;
+    s.center = map.center;
+    s.zoom = map.zoom;
+    return;
+  }
+  const moved = distance(s.center, map.center);
+  const viewport = distance({ lat: map.bounds.minLat, lon: map.bounds.minLon }, { lat: map.bounds.maxLat, lon: map.bounds.maxLon });
+  $('search-here').hidden = !(moved > viewport * 0.25 || Math.abs(map.zoom - s.zoom) > 1.2);
+}
+
+function clearSearch() {
+  state.search = { query: '', results: [], center: null, zoom: null };
+  map.setSearchResults([]);
+  $('search-results').hidden = true;
+  $('search-here').hidden = true;
+}
+
 function showRecents() {
   const recents = store.load(store.KEYS.recents, []) || [];
   renderSearchResults(
     $('search-results'),
     recents.map((r) => ({ ...r, kind: 'recent', address: '' })),
-    pickPlace
+    pickPlace,
+    { units: units() }
   );
 }
 
@@ -683,6 +754,9 @@ function pickPlace(place) {
   $('search-clear').hidden = false;
   $('search').blur();
   store.pushRecent(place);
+  map.setSearchResults([]);
+  $('search-here').hidden = true;
+  state.search.results = [];
   setDestination({ lat: place.lat, lon: place.lon }, place.label);
 }
 
@@ -716,6 +790,8 @@ map.onBlockTap = (entry) => {
   if (state.blockMode || state.mode === 'navigating') return;
   openEntryEditor(entry);
 };
+map.onResultTap = (r) => pickPlace(r);
+$('search-here').addEventListener('click', searchHere);
 map.userInteracted = () => {
   if (state.mode === 'navigating' && map.follow) {
     map.follow = false;
@@ -725,6 +801,7 @@ map.userInteracted = () => {
 let viewTimer = null;
 map.map.on('moveend', () => {
   updateCompass();
+  maybeOfferSearchHere();
   clearTimeout(viewTimer);
   viewTimer = setTimeout(() => store.save(store.KEYS.view, { center: map.center, zoom: map.zoom }), 500);
 });
@@ -759,6 +836,7 @@ $('search-form').addEventListener('submit', (e) => {
 $('search').addEventListener('input', (e) => {
   const q = e.target.value;
   $('search-clear').hidden = !q;
+  if (q !== state.search.query) $('search-here').hidden = true;
   clearTimeout(searchTimer);
   if (q.trim().length < 3) {
     if (!q.trim()) showRecents();
@@ -768,11 +846,12 @@ $('search').addEventListener('input', (e) => {
 });
 $('search').addEventListener('focus', () => {
   if (!$('search').value.trim()) showRecents();
+  else if (state.search.results.length && $('search').value === state.search.query) $('search-results').hidden = false;
 });
 $('search-clear').addEventListener('click', () => {
   $('search').value = '';
   $('search-clear').hidden = true;
-  $('search-results').hidden = true;
+  clearSearch();
   $('search').focus();
 });
 document.addEventListener('click', (e) => {

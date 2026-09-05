@@ -4,6 +4,7 @@ import { formatDistance } from './geo.js';
 import { stepIcon } from './instructions.js';
 import { TILE_SOURCES } from './map.js';
 import { PROFILES } from './router.js';
+import { CROSSING_RULES } from './blocklist.js';
 
 export const $ = (id) => document.getElementById(id);
 
@@ -95,13 +96,21 @@ export function trackSheetHeight(...elements) {
   return update;
 }
 
-export function renderSearchResults(list, results, onPick) {
+export function renderSearchResults(list, results, onPick, { units = 'metric', numbered = false } = {}) {
   list.replaceChildren(
-    ...results.map((r) =>
+    ...results.map((r, i) =>
       el(
         'li',
         { tabindex: 0, role: 'option', onclick: () => onPick(r), onkeydown: (e) => e.key === 'Enter' && onPick(r) },
-        [el('span', { class: 'name', text: r.label }), r.kind ? el('span', { class: 'kind', text: r.kind }) : null, el('span', { class: 'addr', text: r.address || '' })]
+        [
+          numbered ? el('span', { class: 'num', text: String(i + 1) }) : null,
+          el('div', { class: 'body' }, [
+            el('span', { class: 'name', text: r.label }),
+            r.kind ? el('span', { class: 'kind', text: r.kind }) : null,
+            el('span', { class: 'addr', text: r.address || '' }),
+          ]),
+          Number.isFinite(r.distance) ? el('span', { class: 'dist', text: formatDistance(r.distance, units) }) : null,
+        ]
       )
     )
   );
@@ -149,6 +158,7 @@ export function renderSettings(settings, onChange, { onClearTiles } = {}) {
     setting('Voice guidance', 'Spoken turn prompts', toggle(settings.voice, (v) => onChange('voice', v))),
     setting('Map style', '3D styles rotate and tilt while navigating', select('tiles', Object.entries(TILE_SOURCES).map(([k, v]) => [k, v.label]))),
     setting('Navigation view', 'Tap the compass while riding to switch', select('navView', [['3d', '3D, heading up'], ['north', 'Flat, north up']])),
+    setting('Crossing blocked roads', 'Default for new blocks; editable per road', select('crossing', Object.entries(CROSSING_RULES))),
     setting('Street names in directions', 'Looks up road names from OpenStreetMap after each route', toggle(settings.streetNames, (v) => onChange('streetNames', v))),
     setting('Auto-reroute', 'Recalculate when you leave the route', toggle(settings.autoReroute, (v) => onChange('autoReroute', v))),
     setting(
@@ -187,7 +197,7 @@ export function renderBlocklist(entries, units, { onToggle, onEdit, onShow, onDe
             text:
               e.kind === 'point'
                 ? `Spot · ${Math.round(e.radius)} m radius`
-                : `${e.kind === 'road' ? 'Whole road' : 'Stretch'} · ${formatDistance(e.length || 0, units)}${e.lines?.length > 1 ? ` · ${e.lines.length} segments` : ''}`,
+                : `${e.kind === 'road' ? 'Whole road' : 'Stretch'} · ${formatDistance(e.length || 0, units)} · ${(e.crossing || 'signals') === 'signals' ? 'cross at lights' : 'cross anywhere'}`,
           }),
         ]),
         el('button', { class: 'icon-btn', title: 'Show on map', text: '🗺', onclick: () => onShow(e) }),
@@ -205,15 +215,31 @@ export function renderBlocklist(entries, units, { onToggle, onEdit, onShow, onDe
 export function renderEntryEditor(entry, units, { onSave, onDelete, onShow }) {
   const name = el('input', { type: 'text', value: entry.name, style: 'width:100%;max-width:100%' });
   let radius = null;
+  let crossing = null;
   if (entry.kind === 'point') radius = el('input', { type: 'number', min: 5, max: 500, step: 5, value: Math.round(entry.radius) });
+  else {
+    crossing = el(
+      'select',
+      {},
+      Object.entries(CROSSING_RULES).map(([v, label]) => el('option', { value: v, selected: (entry.crossing || 'signals') === v, text: label }))
+    );
+  }
+  const lights = entry.signals?.length || 0;
   return el('div', {}, [
     setting('Name', null, name),
     radius ? setting('Radius (m)', 'Everything inside is avoided, including crossings', radius) : null,
+    crossing
+      ? setting('Crossing allowed', lights ? `${lights} traffic ${lights === 1 ? 'light' : 'lights'} found on this road` : 'No traffic lights found on this road', crossing)
+      : null,
     entry.kind !== 'point'
-      ? el('p', { class: 'hint', text: `${formatDistance(entry.length || 0, units)} of road. Riding along it is blocked; crossing it at junctions is still allowed.` })
+      ? el('p', { class: 'hint', text: `${formatDistance(entry.length || 0, units)} of road. Riding along it is never allowed; crossing follows the rule above.` })
       : null,
     el('div', { class: 'row gap', style: 'margin-top:16px' }, [
-      el('button', { class: 'primary grow', text: 'Save', onclick: () => onSave({ name: name.value.trim() || entry.name, radius: radius ? Number(radius.value) : undefined }) }),
+      el('button', {
+        class: 'primary grow',
+        text: 'Save',
+        onclick: () => onSave({ name: name.value.trim() || entry.name, radius: radius ? Number(radius.value) : undefined, crossing: crossing ? crossing.value : undefined }),
+      }),
       el('button', { class: 'secondary', text: 'Show', onclick: onShow }),
       el('button', { class: 'danger', text: 'Delete', onclick: onDelete }),
     ]),

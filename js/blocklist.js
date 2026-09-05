@@ -12,6 +12,12 @@
 // would also forbid *crossing* the road at junctions. Instead we lay short
 // perpendicular "gates" across the roadway between junctions. Riding along
 // the road must pass through a gate; crossing at a junction never does.
+//
+// Each road/stretch has a crossing rule:
+//   'signals' (default) – crossing is only allowed at junctions with traffic
+//                         lights; every other junction along the road gets a
+//                         small no-go circle so it can't be crossed either.
+//   'all'               – crossing is allowed at every junction.
 
 import {
   bbox,
@@ -30,6 +36,10 @@ export const GATE_HALF_WIDTH = 6; // metres either side of the centreline
 export const GATE_SPACING_KNOWN_JUNCTIONS = 60; // metres between gates within a run
 export const GATE_SPACING_UNKNOWN = 30; // denser when we don't know junction positions
 export const GATE_MIN_RUN = 6; // runs shorter than this can't take a gate safely
+export const JUNCTION_BLOCK_RADIUS = 5; // metres: circle that closes an unsignalled junction
+export const SIGNAL_MATCH_DISTANCE = 25; // a traffic-signal node this close counts for the junction
+export const CROSSING_RULES = { signals: 'Only at traffic lights', all: 'At any intersection' };
+export const DEFAULT_CROSSING = 'signals';
 export const MAX_NOGO_POINTS = 1400; // keeps the GET URL comfortably under limits
 
 let counter = 0;
@@ -50,16 +60,18 @@ export function createPoint(center, { radius = DEFAULT_POINT_RADIUS, name = '' }
   };
 }
 
-export function createStretch(line, { name = '', junctions = [] } = {}) {
-  return withLines({ kind: 'stretch', name: name || 'Blocked stretch', lines: [line], junctions });
+export function createStretch(line, { name = '', junctions = [], signals = [], crossing = DEFAULT_CROSSING } = {}) {
+  return withLines({ kind: 'stretch', name: name || 'Blocked stretch', lines: [line], junctions, signals, crossing });
 }
 
-export function createRoad(lines, { name = '', junctions = [] } = {}) {
-  return withLines({ kind: 'road', name: name || 'Blocked road', lines, junctions });
+export function createRoad(lines, { name = '', junctions = [], signals = [], crossing = DEFAULT_CROSSING } = {}) {
+  return withLines({ kind: 'road', name: name || 'Blocked road', lines, junctions, signals, crossing });
 }
 
-function withLines({ kind, name, lines, junctions }) {
-  const clean = lines.filter((l) => l && l.length >= 2).map((l) => l.map((p) => ({ lat: p.lat, lon: p.lon })));
+const pt = (p) => ({ lat: p.lat, lon: p.lon });
+
+function withLines({ kind, name, lines, junctions, signals, crossing }) {
+  const clean = lines.filter((l) => l && l.length >= 2).map((l) => l.map(pt));
   const all = clean.flat();
   return {
     id: newId(),
@@ -68,10 +80,51 @@ function withLines({ kind, name, lines, junctions }) {
     enabled: true,
     createdAt: Date.now(),
     lines: clean,
-    junctions: (junctions || []).map((p) => ({ lat: p.lat, lon: p.lon })),
+    junctions: (junctions || []).map(pt),
+    signals: (signals || []).map(pt),
+    crossing: CROSSING_RULES[crossing] ? crossing : DEFAULT_CROSSING,
     bbox: all.length ? bbox(all) : null,
     length: clean.reduce((acc, l) => acc + cumulativeDistances(l).at(-1), 0),
   };
+}
+
+/**
+ * Junctions where the blocked road continues on both sides ("interior"):
+ * these are the ones a rider could cross. Where the road merely ends at
+ * another street (a T), there is nothing to cross, so it is left alone.
+ */
+export function crossableJunctions(entry, tol = 1.5) {
+  const out = [];
+  for (const j of entry.junctions || []) {
+    let touches = 0;
+    let endpointTouches = 0;
+    for (const line of entry.lines) {
+      let hit = false;
+      let atEnd = false;
+      for (let i = 0; i < line.length; i++) {
+        if (distance(line[i], j) <= tol) {
+          hit = true;
+          if (i === 0 || i === line.length - 1) atEnd = true;
+        }
+      }
+      if (hit) {
+        touches += 1;
+        if (atEnd) endpointTouches += 1;
+      }
+    }
+    if (touches >= 2 || (touches === 1 && endpointTouches === 0)) out.push(j);
+  }
+  return out;
+}
+
+export function isSignalled(junction, signals) {
+  return (signals || []).some((s) => distance(s, junction) <= SIGNAL_MATCH_DISTANCE);
+}
+
+/** Circles that close unsignalled junctions under the 'signals' crossing rule. */
+export function junctionBlocksForEntry(entry) {
+  if (entry.kind === 'point' || (entry.crossing || DEFAULT_CROSSING) !== 'signals') return [];
+  return crossableJunctions(entry).filter((j) => !isSignalled(j, entry.signals));
 }
 
 export function entryBBox(entry) {
@@ -174,13 +227,15 @@ export function toNogoParams(entries, routeBBox, { maxPoints = MAX_NOGO_POINTS, 
       continue;
     }
     const gates = gatesForEntry(e).filter((g) => !relaxed(g[0]) && !relaxed(g[1]));
-    if (!gates.length) continue;
-    if (gates.length * 2 > pointBudget) {
+    const closed = junctionBlocksForEntry(e).filter((j) => !relaxed(j, JUNCTION_BLOCK_RADIUS));
+    if (!gates.length && !closed.length) continue;
+    if (gates.length * 2 + closed.length > pointBudget) {
       truncated = true;
       continue;
     }
     for (const g of gates) lines.push(`${f6(g[0].lon)},${f6(g[0].lat)},${f6(g[1].lon)},${f6(g[1].lat)}`);
-    pointBudget -= gates.length * 2;
+    for (const j of closed) circles.push(`${f6(j.lon)},${f6(j.lat)},${JUNCTION_BLOCK_RADIUS}`);
+    pointBudget -= gates.length * 2 + closed.length;
     used.push(e.id);
   }
   return { nogos: circles.join('|'), polylines: lines.join('|'), used, truncated };
@@ -206,7 +261,7 @@ export function normalizeEntry(raw) {
   }
   if (raw.kind === 'road' || raw.kind === 'stretch') {
     if (!Array.isArray(raw.lines) || !raw.lines.length) return null;
-    const e = withLines({ kind: raw.kind, name: raw.name, lines: raw.lines, junctions: raw.junctions });
+    const e = withLines({ kind: raw.kind, name: raw.name, lines: raw.lines, junctions: raw.junctions, signals: raw.signals, crossing: raw.crossing });
     return { ...e, id: raw.id, enabled: raw.enabled !== false, createdAt: raw.createdAt || e.createdAt };
   }
   return null;

@@ -25,6 +25,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   profile: 'trekking',
   tiles: 'liberty',
   navView: '3d', // '3d' course-up perspective | 'north' north-up flat
+  crossing: 'signals', // default crossing rule for new blocked roads
   endpoint: DEFAULT_ENDPOINT,
   offRouteMeters: 40,
   autoReroute: true,

@@ -89,3 +89,37 @@ test('blocks next to the start/destination are relaxed so the rider can leave or
   assert.equal(bl.toNogoParams([spot], null, { relaxAround: [{ point: A }] }).nogos, '');
   assert.notEqual(bl.toNogoParams([spot], null).nogos, '');
 });
+
+test('crossable junctions: interior ones count, T-ends do not, split ways are joined', () => {
+  const j1 = g.destination(A, 90, 100); // interior vertex of a single way
+  const end = g.destination(A, 90, 300); // the road ends here (T)
+  const single = bl.createRoad([road], { junctions: [A, j1, end] });
+  assert.deepEqual(bl.crossableJunctions(single), [j1]);
+  // Same road split into two OSM ways at j1: still interior.
+  const split = bl.createRoad([[A, j1], [j1, g.destination(A, 90, 200), end]], { junctions: [A, j1, end] });
+  assert.deepEqual(bl.crossableJunctions(split), [j1]);
+});
+
+test("'signals' rule closes unsignalled junctions with small circles; 'all' does not", () => {
+  const j1 = g.destination(A, 90, 100);
+  const j2 = g.destination(A, 90, 200);
+  const lit = bl.createRoad([road], { junctions: [j1, j2], signals: [g.destination(j2, 0, 10)] });
+  const blocks = bl.junctionBlocksForEntry(lit);
+  assert.equal(blocks.length, 1);
+  assert.ok(g.distance(blocks[0], j1) < 0.01, 'only the junction without a light is closed');
+  const params = bl.toNogoParams([lit], null);
+  assert.equal(params.nogos.split('|').length, 1);
+  assert.match(params.nogos, new RegExp(`,${bl.JUNCTION_BLOCK_RADIUS}$`));
+  const open = bl.createRoad([road], { junctions: [j1, j2], crossing: 'all' });
+  assert.equal(bl.junctionBlocksForEntry(open).length, 0);
+  assert.equal(bl.toNogoParams([open], null).nogos, '');
+});
+
+test('crossing rule and signals survive storage round-trips; unknown rules fall back', () => {
+  const e = bl.createRoad([road], { junctions: [g.destination(A, 90, 100)], signals: [A], crossing: 'all' });
+  const back = bl.normalizeEntry(JSON.parse(JSON.stringify(e)));
+  assert.equal(back.crossing, 'all');
+  assert.equal(back.signals.length, 1);
+  assert.equal(bl.normalizeEntry({ ...JSON.parse(JSON.stringify(e)), crossing: 'bogus' }).crossing, bl.DEFAULT_CROSSING);
+  assert.equal(bl.createStretch(road).crossing, 'signals');
+});

@@ -90,6 +90,7 @@ export class MapView {
     this.onLongPress = () => {};
     this.onTap = () => {};
     this.onBlockTap = () => {};
+    this.onResultTap = () => {};
     this.onBearing = () => {};
     this.suppressClickUntil = 0;
     this.blockMode = false;
@@ -326,6 +327,27 @@ export class MapView {
   setStretchPoints(points) {
     for (const k of Object.keys(this.markers)) if (k.startsWith('stretch')) this.marker(k, null);
     (points || []).forEach((p, i) => this.marker(`stretch${i}`, p, '<div class="pin stretch"></div>'));
+  }
+
+  /** Numbered pins for search results; tapping one calls onResultTap(result). */
+  setSearchResults(results) {
+    for (const k of Object.keys(this.markers)) if (k.startsWith('result')) this.marker(k, null);
+    (results || []).forEach((r, i) => {
+      const mk = this.marker(`result${i}`, r, `<button class="result-pin" type="button" aria-label="${(r.label || '').replace(/"/g, '&quot;')}"><span>${i + 1}</span></button>`);
+      const el = mk?.getElement();
+      if (el && !el.dataset.bound) {
+        el.dataset.bound = '1';
+        el.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          this.onResultTap(r);
+        });
+      }
+    });
+  }
+
+  get bounds() {
+    const b = this.map.getBounds();
+    return { minLat: b.getSouth(), minLon: b.getWest(), maxLat: b.getNorth(), maxLon: b.getEast() };
   }
 
   /** Draw blocklist entries. Tapping one calls onBlockTap(entry). */
