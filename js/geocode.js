@@ -124,24 +124,36 @@ function collapse(list, near) {
   const best = new Map();
   for (const r of list) {
     if (!Number.isFinite(r.lat) || !Number.isFinite(r.lon)) continue;
-    const k = `${r.label}|${r.osm || r.kind}|${(r.address || '').split(',').slice(-2).join(',')}`.toLowerCase();
+    const k = `${r.label.replace(APOS, "'")}|${r.osm || r.kind}|${(r.address || '').split(',').slice(-2).join(',')}`.toLowerCase();
     const d = near ? Math.hypot((r.lat - near.lat) * 111, (r.lon - near.lon) * 111 * Math.cos((near.lat * Math.PI) / 180)) : 0;
     if (!best.has(k) || best.get(k).d > d) best.set(k, { d, r });
   }
   return [...best.values()].map((x) => x.r);
 }
 
-/** Alternative spellings worth trying when a name search comes up short. */
+const APOS = /[\u2019\u2018\u02BC\u0060\u00B4']/g; // ’ ‘ ʼ ` ´ '
+
+/**
+ * Alternative spellings of a name query. OSM names use both the straight (')
+ * and curly (’) apostrophe — geocoders treat them as different characters —
+ * and people type possessives without any: whits → whit's, whit’s, whit.
+ */
 export function spellingVariants(q) {
-  const out = [];
   const t = q.trim();
-  if (/['’]/.test(t)) out.push(t.replace(/['’]/g, ''));
-  else if (/s$/i.test(t) && t.length > 3) {
-    out.push(`${t.slice(0, -1)}'s`); // whits → whit's
-    out.push(t.slice(0, -1)); // whits → whit (prefix match)
+  const plain = t.replace(APOS, '');
+  const out = [];
+  if (APOS.test(t)) {
+    APOS.lastIndex = 0;
+    out.push(t.replace(APOS, "'"), t.replace(APOS, '\u2019'), plain);
+  } else if (/s$/i.test(t) && t.length > 3) {
+    const stem = t.slice(0, -1);
+    out.push(`${stem}'s`, `${stem}\u2019s`); // (the bare stem would match too broadly: "whit" → White Castle)
   }
-  return [...new Set(out)].filter((v) => v && v.toLowerCase() !== t.toLowerCase());
+  return [...new Set(out)].filter((v) => v && v !== t);
 }
+
+/** Does this query look like a possessive/apostrophe name, where spellings vary? */
+const looksPossessive = (q) => APOS.test(q) || /s$/i.test(q.trim());
 
 async function photon(q, near, { limit = 40, signal, fetchImpl }) {
   const p = new URLSearchParams({ q, limit: String(limit), lang: (globalThis.navigator?.language || 'en').slice(0, 2) });
@@ -181,15 +193,15 @@ export async function search(query, { near, rings = [4, 12, 30], limit = 40, wan
       const nearby = (list) => (near ? list.filter((r) => distance(near, r) < NEARBY_KM * 1000) : list);
       let hits = await photon(q, near, { signal, fetchImpl });
       onProgress?.(hits.map((r) => ({ ...r })));
-      // Too few nearby? Names with apostrophes ("Whit's") don't match "whits":
-      // retry likely spellings and merge.
-      if (nearby(hits).length < ENOUGH) {
-        for (const v of spellingVariants(q)) {
-          const more = await photon(v, near, { signal, fetchImpl }).catch(() => []);
-          hits = collapse([...hits, ...more], near);
-          onProgress?.(hits.map((r) => ({ ...r })));
-          if (nearby(hits).length >= ENOUGH) break;
-        }
+      // Apostrophe spellings vary between places with the same name (Whit's vs
+      // Whit’s), so possessive-looking queries always search every spelling;
+      // other queries retry variants only when little was found nearby.
+      APOS.lastIndex = 0;
+      const variants = spellingVariants(q);
+      if (variants.length && (looksPossessive(q) || nearby(hits).length < ENOUGH)) {
+        const more = await Promise.all(variants.map((v) => photon(v, near, { signal, fetchImpl }).catch(() => [])));
+        hits = collapse([...hits, ...more.flat()], near);
+        onProgress?.(hits.map((r) => ({ ...r })));
       }
       const close = nearby(hits);
       if (close.length >= ENOUGH) return close;
