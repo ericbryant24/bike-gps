@@ -9,14 +9,14 @@ No build step, no API keys, no backend: it's static HTML/CSS/JS that deploys str
 - **Turn-by-turn guidance** with a large maneuver banner, "then…" preview, spoken prompts (Web Speech API), speed, distance remaining and ETA.
 - **3D heading-up navigation view**: the map rotates with your direction of travel and tilts to a perspective view with 3D buildings (MapLibre GL + OpenFreeMap vector tiles). Tap the compass to switch to flat north-up.
 - **Bike-specific routing** via [BRouter](https://brouter.de) — balanced / fast / safest / shortest profiles, with elevation-aware timing.
-- **Road blocklist**
-  - *Whole road*: tap a road to block every way with that name nearby.
+- **Road blocklist** — every block is previewed in orange with its name, length, junctions and traffic lights before you confirm it.
+  - *Whole road*: tap a road to block every way with that name within 2 / 5 / 10 km of the tap.
   - *Stretch*: tap two points; the stretch of road between them is traced along the road network and blocked.
-  - *Spot*: a circle nothing may pass through (a dangerous junction, a flooded underpass…).
+  - *Spot*: a circle (20–120 m) nothing may pass through (a dangerous junction, a flooded underpass…).
   - *Avoid this road* while navigating: blocks the road you're on and reroutes instantly.
   - **Crossing rule** per block: *only at traffic lights* (default) or *at any intersection*.
   - Entries can be toggled, renamed, resized, exported/imported as JSON, and are stored on-device.
-- **Search** that sorts results by distance from you, shows them as numbered pins on the map, and offers "Search this area" after you pan.
+- **Search** anchored to *your location* regardless of where the map is: suggestions appear as you type without moving the map; Enter/Go sorts results by distance from you, drops numbered pins and fits them into view; "Search this area" (after you pan) is the only search that uses the visible map instead.
 - **Automatic rerouting** when you leave the route, with GPS-glitch tolerance.
 - **Ride simulator** to preview guidance (and rerouting) without leaving your desk.
 - **Offline-capable PWA**: app shell cached, recently viewed map tiles + fonts/sprites cached (LRU), last route restored on launch, screen wake-lock while navigating, install prompt.

@@ -59,6 +59,31 @@
       <div class="row" id="stretch-actions" hidden>
         <button id="stretch-reset" class="text-btn">Start over</button>
       </div>
+      <div id="block-preview" hidden>
+        <input id="preview-name" type="text" class="preview-name" aria-label="Name" />
+        <div id="preview-meta" class="sub"></div>
+        <div class="chips" id="preview-range" hidden>
+          <span class="sub chip-label">Range</span>
+          <button class="chip" data-km="2">2 km</button>
+          <button class="chip active" data-km="5">5 km</button>
+          <button class="chip" data-km="10">10 km</button>
+        </div>
+        <div class="chips" id="preview-radius" hidden>
+          <span class="sub chip-label">Radius</span>
+          <button class="chip" data-m="20">20 m</button>
+          <button class="chip active" data-m="30">30 m</button>
+          <button class="chip" data-m="60">60 m</button>
+          <button class="chip" data-m="120">120 m</button>
+        </div>
+        <div class="row gap" id="preview-cross-row">
+          <span class="sub">Crossing</span>
+          <select id="preview-crossing" aria-label="Crossing rule"></select>
+        </div>
+        <div class="row gap" style="margin-top:10px">
+          <button id="preview-confirm" class="danger grow">⛔ Block this</button>
+          <button id="preview-discard" class="secondary">Cancel</button>
+        </div>
+      </div>
     </div>
 
     <!-- Long-press context menu -->

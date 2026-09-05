@@ -80,7 +80,7 @@ export class MapView {
     });
     this.map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
     this.tilesId = tiles;
-    this.data = { route: [], done: [], ahead: [], blocks: EMPTY, highlight: [] };
+    this.data = { route: [], done: [], ahead: [], blocks: EMPTY, highlight: [], preview: EMPTY };
     this.markers = {};
     this.follow = false;
     this.courseUp = true;
@@ -126,6 +126,7 @@ export class MapView {
     src('route-ahead', fc(this.data.ahead.length ? [lineFeature(this.data.ahead)] : []));
     src('blocks', this.data.blocks);
     src('highlight', fc(this.data.highlight.length ? [lineFeature(this.data.highlight)] : []));
+    src('preview', this.data.preview || EMPTY);
 
     // Draw under labels but above roads/buildings.
     const before = m.getStyle().layers.find((l) => l.type === 'symbol')?.id;
@@ -137,6 +138,12 @@ export class MapView {
     line('route-done', 'route-done', { 'line-color': '#94a3b8', 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 3.5, 17, 8] });
     line('route-ahead', 'route-ahead', { 'line-color': '#1d4ed8', 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 3.5, 17, 8] });
     line('highlight', 'highlight', { 'line-color': '#f59e0b', 'line-width': 9, 'line-opacity': 0.85 });
+    // Pending block, shown before the user confirms it.
+    if (!m.getLayer('preview-fill')) {
+      m.addLayer({ id: 'preview-fill', type: 'fill', source: 'preview', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': '#f59e0b', 'fill-opacity': 0.3 } }, before);
+    }
+    line('preview-line', 'preview', { 'line-color': '#f59e0b', 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 6, 17, 12], 'line-opacity': 0.9 });
+    m.setFilter('preview-line', ['any', ['==', ['geometry-type'], 'LineString'], ['==', ['geometry-type'], 'Polygon']]);
     if (!m.getLayer('blocks-fill')) {
       m.addLayer(
         {
@@ -322,6 +329,15 @@ export class MapView {
   setHighlight(points) {
     this.data.highlight = points || [];
     this.setSource('highlight', fc(points?.length ? [lineFeature(points)] : []));
+  }
+
+  /** Show a draft blocklist entry in orange (null clears). */
+  setPreview(entry) {
+    let features = [];
+    if (entry?.kind === 'point') features = [{ type: 'Feature', properties: {}, geometry: circlePolygon(entry.center, entry.radius) }];
+    else if (entry?.lines) features = entry.lines.map((l) => lineFeature(l));
+    this.data.preview = fc(features);
+    this.setSource('preview', this.data.preview);
   }
 
   setStretchPoints(points) {

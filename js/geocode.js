@@ -2,7 +2,9 @@
 // Requests are serialised through a small queue that enforces the spacing.
 
 const ENDPOINT = 'https://nominatim.openstreetmap.org';
-const MIN_GAP_MS = 1100;
+const MIN_GAP_MS = 1500;
+const results = new Map(); // session cache: query key → results
+const MAX_CACHED = 40;
 let lastAt = 0;
 let chain = Promise.resolve();
 
@@ -53,8 +55,18 @@ async function nominatim(params, { signal, fetchImpl }) {
     signal,
     headers: { Accept: 'application/json', 'Accept-Language': globalThis.navigator?.language || 'en' },
   });
+  if (res.status === 429 || res.status === 403) throw new Error('The search service is busy — try again in a few seconds.');
   if (!res.ok) throw new Error(`Search failed (${res.status})`);
   return (await res.json()).map(formatResult);
+}
+
+function cached(key, fn) {
+  if (results.has(key)) return Promise.resolve(results.get(key).map((r) => ({ ...r })));
+  return fn().then((list) => {
+    if (results.size >= MAX_CACHED) results.delete(results.keys().next().value);
+    results.set(key, list);
+    return list.map((r) => ({ ...r }));
+  });
 }
 
 const baseParams = (q, limit) => new URLSearchParams({ q, format: 'jsonv2', limit: String(limit), addressdetails: '1', dedupe: '1' });
@@ -79,7 +91,8 @@ export async function search(query, { near, radiusKm = 30, limit = 10, signal, f
   if (!q) return [];
   const direct = parseLatLon(q);
   if (direct) return [{ label: `${direct.lat.toFixed(5)}, ${direct.lon.toFixed(5)}`, address: 'Coordinates', kind: '', ...direct }];
-  return throttled(async () => {
+  const key = `near|${q.toLowerCase()}|${near ? `${near.lat.toFixed(2)},${near.lon.toFixed(2)}` : '-'}`;
+  return cached(key, () => throttled(async () => {
     let results = [];
     if (near) {
       const dLat = radiusKm / 111;
@@ -95,19 +108,20 @@ export async function search(query, { near, radiusKm = 30, limit = 10, signal, f
       results = dedupe([...results, ...(await nominatim(p, { signal, fetchImpl }))]);
     }
     return results;
-  });
+  }));
 }
 
 /** Search only inside the given bounds ("search this area"). */
 export async function searchInBounds(query, bounds, { limit = 12, signal, fetchImpl = globalThis.fetch } = {}) {
   const q = query.trim();
   if (!q) return [];
-  return throttled(async () => {
+  const key = `box|${q.toLowerCase()}|${[bounds.minLat, bounds.minLon, bounds.maxLat, bounds.maxLon].map((v) => v.toFixed(3)).join(',')}`;
+  return cached(key, () => throttled(async () => {
     const p = baseParams(q, limit);
     p.set('viewbox', viewbox(bounds));
     p.set('bounded', '1');
     return nominatim(p, { signal, fetchImpl });
-  });
+  }));
 }
 
 /** Reverse geocode to a short label; never throws (returns null instead). */
