@@ -142,13 +142,47 @@ function routeBBox(from, to) {
   return bbox([from, to], pad);
 }
 
+/**
+ * Route with the blocklist applied.
+ *
+ * Pass 1 sends the blocks nearest the straight line start→destination. If
+ * the request had to be thinned and the route still rides along a blocked
+ * road, pass 2 re-sends with the blocks nearest the *route* prioritised.
+ * If no route can avoid every block, a final pass uses soft penalties so the
+ * router spends as little distance as possible on blocked roads. The route
+ * carries `blockedUse` (which blocks it still rides along) and `soft`.
+ */
 async function computeRoute(from, to, { signal } = {}) {
-  const nogo = bl.toNogoParams(state.blocklist, routeBBox(from, to), { relaxAround: [{ point: from }, { point: to }] });
-  const route = await fetchRoute(
-    { endpoint: state.settings.endpoint, from, to, profile: state.settings.profile, nogos: nogo.nogos, polylines: nogo.polylines, nogoIds: nogo.used },
-    { signal }
-  );
-  route.truncated = nogo.truncated;
+  const box = routeBBox(from, to);
+  const relaxAround = [{ point: from }, { point: to }];
+  const active = state.blocklist.filter((e) => e.enabled);
+  const request = (nogo) =>
+    fetchRoute(
+      { endpoint: state.settings.endpoint, from, to, profile: state.settings.profile, nogos: nogo.nogos, polylines: nogo.polylines, nogoIds: nogo.used },
+      { signal }
+    );
+  let focus = [from, to];
+  let route = null;
+  let nogo = null;
+  for (let pass = 0; pass < 2; pass++) {
+    nogo = bl.toNogoParams(active, box, { relaxAround, focus });
+    try {
+      route = await request(nogo);
+    } catch (e) {
+      if (e.code !== 'no-route' || !(nogo.nogos || nogo.polylines)) throw e;
+      // Fenced in: allow blocked roads, but make every metre on them expensive.
+      const soft = bl.toNogoParams(active, box, { relaxAround, focus, weight: bl.SOFT_WEIGHT });
+      route = await request(soft);
+      route.soft = true;
+      route.truncated = soft.truncated;
+      route.blockedUse = bl.entriesUsedByRoute(route, active);
+      return route;
+    }
+    route.blockedUse = bl.entriesUsedByRoute(route, active);
+    route.truncated = nogo.truncated;
+    if (!route.blockedUse.length || !nogo.truncated) break;
+    focus = route.points;
+  }
   return route;
 }
 
@@ -231,11 +265,15 @@ function renderSheet() {
   });
   const warn = $('plan-warning');
   const blockedUsed = r.nogoIds?.length || 0;
-  if (r.truncated) {
-    warn.textContent = 'Too many blocked roads in this area — some were ignored for this route.';
+  const uses = (r.blockedUse || []).map((u) => `${u.entry.name} (${formatDistance(u.meters, units())})`).join(', ');
+  if (r.soft) {
+    warn.textContent = `No route can avoid every blocked road. This one uses blocked roads as little as possible: ${uses || 'none'}.`;
+    warn.hidden = false;
+  } else if (uses) {
+    warn.textContent = `Heads up: this route still rides along ${uses}.`;
     warn.hidden = false;
   } else if (blockedUsed) {
-    warn.textContent = `Avoiding ${blockedUsed} blocked ${blockedUsed === 1 ? 'road' : 'roads'}.`;
+    warn.textContent = `Avoiding ${blockedUsed} blocked ${blockedUsed === 1 ? 'road' : 'roads'}${r.truncated ? ' (far-away parts of long blocks were left out of this request)' : ''}.`;
     warn.hidden = false;
   } else warn.hidden = true;
   renderSteps($('steps-list'), state.announceable, units());
@@ -359,6 +397,10 @@ async function reroute() {
     state.nav.setRoute(route, state.announceable);
     state.nav.started = true;
     $('nav-offroute').hidden = true;
+    if (route.blockedUse?.length) {
+      const names = route.blockedUse.map((u) => u.entry.name).join(', ');
+      toast(route.soft ? `No route avoids every blocked road — using ${names} as little as possible.` : `Heads up: this route still uses ${names}.`, { duration: 6000 });
+    }
     store.save(store.KEYS.lastRoute, { route, steps, dest: state.dest, destLabel: state.destLabel, start: null });
     enrichNames(route, steps).catch(() => {});
   } catch (e) {

@@ -26,6 +26,7 @@ import {
   cumulativeDistances,
   destination,
   distance,
+  interpolate,
   pointAtDistance,
   simplify,
   snapToPath,
@@ -40,7 +41,8 @@ export const JUNCTION_BLOCK_RADIUS = 5; // metres: circle that closes an unsigna
 export const SIGNAL_MATCH_DISTANCE = 25; // a traffic-signal node this close counts for the junction
 export const CROSSING_RULES = { signals: 'Only at traffic lights', all: 'At any intersection' };
 export const DEFAULT_CROSSING = 'signals';
-export const MAX_NOGO_POINTS = 1400; // keeps the GET URL comfortably under limits
+export const MAX_NOGO_BYTES = 20000; // brouter.de rejects URLs somewhere above ~25 KB (HTTP 414)
+export const SOFT_WEIGHT = 100; // penalty weight used when no route can avoid every block
 
 let counter = 0;
 export function newId() {
@@ -200,16 +202,24 @@ const f6 = (n) => n.toFixed(6).replace(/\.?0+$/, '');
  */
 export const RELAX_RADIUS = 150; // metres around start/destination where blocks are lifted
 
-export function toNogoParams(entries, routeBBox, { maxPoints = MAX_NOGO_POINTS, relaxAround = [] } = {}) {
-  const circles = [];
-  const lines = [];
-  const used = [];
-  let truncated = false;
-  let pointBudget = maxPoints;
+/**
+ * Build BRouter `nogos` and `polylines` parameter values.
+ *
+ * Every gate and circle becomes an item. Items are ranked by how close they
+ * are to `focus` (the straight line start→destination, or a previous route)
+ * and packed into a byte budget nearest-first, so when there is more blocked
+ * road than fits in one request the parts that matter most are always sent
+ * and nothing is dropped wholesale. `weight` softens blocks into penalties.
+ *
+ * Returns { nogos, polylines, used, truncated, dropped, total }.
+ */
+export function toNogoParams(entries, routeBBox, { maxBytes = MAX_NOGO_BYTES, relaxAround = [], focus = null, weight = null } = {}) {
   // A rider standing on a blocked road must be able to ride off it (and reach
   // a destination on one), so gates and circles right next to the trip's end
   // points are dropped for that request.
   const relaxed = (p, extra = 0) => relaxAround.some((z) => distance(z.point, p) <= (z.radius ?? RELAX_RADIUS) + extra);
+  const suffix = weight == null ? '' : `,${Math.round(weight)}`;
+  const items = [];
 
   for (const e of entries) {
     if (!e.enabled) continue;
@@ -217,28 +227,64 @@ export function toNogoParams(entries, routeBBox, { maxPoints = MAX_NOGO_POINTS, 
     if (!eb || (routeBBox && !bboxIntersects(eb, routeBBox))) continue;
     if (e.kind === 'point') {
       if (relaxed(e.center, e.radius)) continue;
-      if (pointBudget < 1) {
-        truncated = true;
-        continue;
-      }
-      circles.push(`${f6(e.center.lon)},${f6(e.center.lat)},${Math.round(e.radius)}`);
-      pointBudget -= 1;
-      used.push(e.id);
+      items.push({ id: e.id, kind: 'circle', pos: e.center, str: `${f6(e.center.lon)},${f6(e.center.lat)},${Math.round(e.radius)}${suffix}` });
       continue;
     }
-    const gates = gatesForEntry(e).filter((g) => !relaxed(g[0]) && !relaxed(g[1]));
-    const closed = junctionBlocksForEntry(e).filter((j) => !relaxed(j, JUNCTION_BLOCK_RADIUS));
-    if (!gates.length && !closed.length) continue;
-    if (gates.length * 2 + closed.length > pointBudget) {
-      truncated = true;
-      continue;
+    for (const g of gatesForEntry(e)) {
+      if (relaxed(g[0]) || relaxed(g[1])) continue;
+      items.push({ id: e.id, kind: 'gate', pos: interpolate(g[0], g[1], 0.5), str: `${f6(g[0].lon)},${f6(g[0].lat)},${f6(g[1].lon)},${f6(g[1].lat)}${suffix}` });
     }
-    for (const g of gates) lines.push(`${f6(g[0].lon)},${f6(g[0].lat)},${f6(g[1].lon)},${f6(g[1].lat)}`);
-    for (const j of closed) circles.push(`${f6(j.lon)},${f6(j.lat)},${JUNCTION_BLOCK_RADIUS}`);
-    pointBudget -= gates.length * 2 + closed.length;
-    used.push(e.id);
+    for (const j of junctionBlocksForEntry(e)) {
+      if (relaxed(j, JUNCTION_BLOCK_RADIUS)) continue;
+      items.push({ id: e.id, kind: 'circle', pos: j, str: `${f6(j.lon)},${f6(j.lat)},${JUNCTION_BLOCK_RADIUS}${suffix}` });
+    }
   }
-  return { nogos: circles.join('|'), polylines: lines.join('|'), used, truncated };
+
+  if (focus && focus.length) {
+    const cum = focus.length > 1 ? cumulativeDistances(focus) : null;
+    for (const it of items) it.rel = cum ? snapToPath(it.pos, focus, cum, 0, focus.length).dist : distance(it.pos, focus[0]);
+    items.sort((a, b) => a.rel - b.rel);
+  }
+
+  const circles = [];
+  const lines = [];
+  const used = new Set();
+  let bytes = 0;
+  let dropped = 0;
+  for (const it of items) {
+    if (bytes + it.str.length + 1 > maxBytes) {
+      dropped += 1;
+      continue;
+    }
+    bytes += it.str.length + 1;
+    (it.kind === 'circle' ? circles : lines).push(it.str);
+    used.add(it.id);
+  }
+  return { nogos: circles.join('|'), polylines: lines.join('|'), used: [...used], truncated: dropped > 0, dropped, total: items.length };
+}
+
+/**
+ * Which blocked roads a route actually travels along, and for how far.
+ * Returns [{ entry, meters }] sorted by distance travelled, longest first.
+ */
+export function entriesUsedByRoute(route, entries, { step = 15, maxDist = 8, minMeters = 40 } = {}) {
+  const active = entries.filter((e) => e.enabled && e.kind !== 'point' && e.lines?.length);
+  if (!active.length || !route?.points?.length) return [];
+  const rb = bbox(route.points, 20);
+  const candidates = active.filter((e) => bboxIntersects(entryBBox(e), rb)).map((e) => ({ e, lines: e.lines.map((l) => ({ l, cum: cumulativeDistances(l) })), meters: 0 }));
+  if (!candidates.length) return [];
+  const cum = route.cum || cumulativeDistances(route.points);
+  const total = cum[cum.length - 1];
+  for (let d = 0; d <= total; d += step) {
+    const p = pointAtDistance(route.points, cum, d).point;
+    for (const c of candidates) {
+      if (c.lines.some(({ l, cum: lc }) => snapToPath(p, l, lc, 0, l.length).dist < maxDist)) c.meters += step;
+    }
+  }
+  return candidates
+    .filter((c) => c.meters >= minMeters)
+    .sort((a, b) => b.meters - a.meters)
+    .map((c) => ({ entry: c.e, meters: c.meters }));
 }
 
 /** Distance from a point to the nearest part of an entry (metres). */

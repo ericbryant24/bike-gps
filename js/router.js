@@ -46,11 +46,11 @@ export function parseRoute(body, meta = {}) {
   let json = body;
   if (typeof body === 'string') {
     const trimmed = body.trim();
-    if (!trimmed.startsWith('{')) throw new Error(friendlyError(trimmed));
+    if (!trimmed.startsWith('{')) throw routingError(trimmed);
     json = JSON.parse(trimmed);
   }
   const feat = json?.features?.[0];
-  if (!feat?.geometry?.coordinates?.length) throw new Error('No route found between those points.');
+  if (!feat?.geometry?.coordinates?.length) throw routingError('no track found');
   const props = feat.properties || {};
   const points = feat.geometry.coordinates.map((c) => ({ lon: c[0], lat: c[1], ele: c[2] }));
   const cum = cumulativeDistances(points);
@@ -68,6 +68,14 @@ export function parseRoute(body, meta = {}) {
     nogoIds: meta.nogoIds || [],
     createdAt: Date.now(),
   };
+}
+
+/** Error with a `code` so callers can react ('no-route' → try softer blocks). */
+function routingError(text) {
+  const err = new Error(friendlyError(text));
+  const t = text.toLowerCase();
+  if (t.includes('no track found') || t.includes('no route') || t.includes('island')) err.code = 'no-route';
+  return err;
 }
 
 function friendlyError(text) {
@@ -88,7 +96,7 @@ export async function fetchRoute(params, { fetchImpl = globalThis.fetch, signal,
   try {
     const res = await fetchImpl(url, { signal: ctrl.signal });
     const text = await res.text();
-    if (!res.ok && !text.trim().startsWith('{')) throw new Error(friendlyError(text || `Routing failed (${res.status})`));
+    if (!res.ok && !text.trim().startsWith('{')) throw routingError(text || `Routing failed (${res.status})`);
     return parseRoute(text, { profile: params.profile, from: params.from, to: params.to, nogoIds: params.nogoIds });
   } finally {
     clearTimeout(timer);
