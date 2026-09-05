@@ -80,7 +80,7 @@ export class MapView {
     });
     this.map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
     this.tilesId = tiles;
-    this.data = { route: [], done: [], ahead: [], blocks: EMPTY, highlight: [], preview: EMPTY };
+    this.data = { route: [], done: [], ahead: [], blocks: EMPTY, highlight: [], preview: EMPTY, accuracy: EMPTY };
     this.markers = {};
     this.follow = false;
     this.courseUp = true;
@@ -127,6 +127,7 @@ export class MapView {
     src('blocks', this.data.blocks);
     src('highlight', fc(this.data.highlight.length ? [lineFeature(this.data.highlight)] : []));
     src('preview', this.data.preview || EMPTY);
+    src('me-accuracy', this.data.accuracy || EMPTY);
 
     // Draw under labels but above roads/buildings.
     const before = m.getStyle().layers.find((l) => l.type === 'symbol')?.id;
@@ -138,6 +139,10 @@ export class MapView {
     line('route-done', 'route-done', { 'line-color': '#94a3b8', 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 3.5, 17, 8] });
     line('route-ahead', 'route-ahead', { 'line-color': '#1d4ed8', 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 3.5, 17, 8] });
     line('highlight', 'highlight', { 'line-color': '#f59e0b', 'line-width': 9, 'line-opacity': 0.85 });
+    if (!m.getLayer('me-accuracy')) {
+      m.addLayer({ id: 'me-accuracy', type: 'fill', source: 'me-accuracy', paint: { 'fill-color': '#1d4ed8', 'fill-opacity': 0.12 } }, before);
+      m.addLayer({ id: 'me-accuracy-line', type: 'line', source: 'me-accuracy', paint: { 'line-color': '#1d4ed8', 'line-opacity': 0.35, 'line-width': 1 } }, before);
+    }
     // Pending block, shown before the user confirms it.
     if (!m.getLayer('preview-fill')) {
       m.addLayer({ id: 'preview-fill', type: 'fill', source: 'preview', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': '#f59e0b', 'fill-opacity': 0.3 } }, before);
@@ -248,6 +253,7 @@ export class MapView {
   setMe(p, { heading = null, accuracy = null, stale = false } = {}) {
     if (!p) {
       this.marker('me', null);
+      this.setSource('me-accuracy', EMPTY);
       return;
     }
     const mk = this.marker('me', p, '<div class="me-marker"><div class="cone" hidden></div><div class="dot"></div></div>', {
@@ -255,6 +261,9 @@ export class MapView {
       rotationAlignment: 'map',
       pitchAlignment: 'viewport',
     });
+    // GPS uncertainty ring (only when it's big enough to matter on screen).
+    this.data.accuracy = Number.isFinite(accuracy) && accuracy > 12 ? fc([{ type: 'Feature', properties: {}, geometry: circlePolygon(p, Math.min(accuracy, 500)) }]) : EMPTY;
+    this.setSource('me-accuracy', this.data.accuracy);
     const root = mk.getElement();
     root.classList.toggle('stale', stale);
     const cone = root.querySelector('.cone');
