@@ -1570,7 +1570,18 @@ function boot() {
       if (p.state === 'granted') currentPosition({ silent: true }).catch(() => {});
     }).catch(() => {});
   }
-  window.addEventListener('resize', () => map.invalidate());
+  // Keep the map canvas matched to the viewport: iOS Home Screen apps can
+  // shift or shrink the page around the keyboard without a resize event.
+  const settle = () => {
+    window.scrollTo(0, 0);
+    map.invalidate();
+  };
+  window.addEventListener('resize', settle);
+  window.addEventListener('orientationchange', () => setTimeout(settle, 300));
+  window.visualViewport?.addEventListener('resize', settle);
+  document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && setTimeout(settle, 50));
+  $('search').addEventListener('blur', () => setTimeout(settle, 60));
+  new ResizeObserver(() => map.invalidate()).observe($('map'));
   maybeOfferIosInstall();
 }
 boot();
