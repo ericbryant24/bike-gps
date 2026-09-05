@@ -221,3 +221,32 @@ export async function namesForSteps(steps, route, { signal, lookAhead = 18 } = {
   }
   return names;
 }
+
+const qre = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/"/g, '\\"');
+
+/**
+ * Every named place (shop, amenity, …) whose name starts with `text` within
+ * `radius` metres. Exhaustive and proximity-based — the complement to a
+ * geocoder's importance-ranked hits. Never throws; returns [] on failure.
+ */
+export async function placesNamed(text, near, { radius = 12000, signal, timeoutMs = 6000 } = {}) {
+  const t = text.trim();
+  if (t.length < 3 || /\d/.test(t)) return [];
+  const ql = `[out:json][timeout:8];nwr["name"~"^${qre(t)}",i]["name"]["highway"!~"."](around:${Math.round(radius)},${f6(near.lat)},${f6(near.lon)});out center tags 60;`;
+  try {
+    const res = await query(ql, { signal, timeoutMs });
+    return (res.elements || [])
+      .map((e) => {
+        const lat = e.lat ?? e.center?.lat;
+        const lon = e.lon ?? e.center?.lon;
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+        const tags = e.tags || {};
+        const kind = (tags.shop || tags.amenity || tags.leisure || tags.tourism || tags.office || '').replace(/_/g, ' ');
+        const addr = [tags['addr:housenumber'], tags['addr:street']].filter(Boolean).join(' ');
+        return { label: tags.name, address: [addr, tags['addr:city']].filter(Boolean).join(', '), kind, lat, lon };
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}

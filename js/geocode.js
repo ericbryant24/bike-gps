@@ -69,7 +69,7 @@ function cached(key, fn) {
   });
 }
 
-const baseParams = (q, limit) => new URLSearchParams({ q, format: 'jsonv2', limit: String(limit), addressdetails: '1', dedupe: '1' });
+const baseParams = (q, limit) => new URLSearchParams({ q, format: 'jsonv2', limit: String(Math.min(40, limit)), addressdetails: '1', dedupe: '1' });
 const viewbox = (b) => `${b.minLon},${b.maxLat},${b.maxLon},${b.minLat}`;
 const dedupe = (list) => {
   const seen = new Set();
@@ -81,34 +81,50 @@ const dedupe = (list) => {
   });
 };
 
+const box = (near, km) => {
+  const dLat = km / 111;
+  const dLon = dLat / Math.max(0.2, Math.cos((near.lat * Math.PI) / 180));
+  return { minLon: near.lon - dLon, maxLon: near.lon + dLon, minLat: near.lat - dLat, maxLat: near.lat + dLat };
+};
+
 /**
- * Search for places near a point. Looks inside a box around `near` first so
- * chains ("Kroger") return the nearby branches, then widens if that found
- * little. Results are unsorted; callers sort by distance.
+ * Search for places near a point.
+ *
+ * Nominatim returns at most `limit` matches inside a box ranked by its own
+ * importance score, not by distance — so one big box around the rider can
+ * omit the nearest branch of a chain. We search expanding rings instead and
+ * stop as soon as a ring came back with fewer than `limit` hits (i.e. it was
+ * exhaustive for that area) and we have enough results. `onProgress` gets
+ * the merged list after each ring so the UI can show nearby hits at once.
  */
-export async function search(query, { near, radiusKm = 30, limit = 10, signal, fetchImpl = globalThis.fetch } = {}) {
+export async function search(query, { near, rings = [4, 12, 30], limit = 40, want = 8, onProgress, signal, fetchImpl = globalThis.fetch } = {}) {
   const q = query.trim();
   if (!q) return [];
   const direct = parseLatLon(q);
   if (direct) return [{ label: `${direct.lat.toFixed(5)}, ${direct.lon.toFixed(5)}`, address: 'Coordinates', kind: '', ...direct }];
   const key = `near|${q.toLowerCase()}|${near ? `${near.lat.toFixed(2)},${near.lon.toFixed(2)}` : '-'}`;
-  return cached(key, () => throttled(async () => {
-    let results = [];
-    if (near) {
-      const dLat = radiusKm / 111;
-      const dLon = dLat / Math.max(0.2, Math.cos((near.lat * Math.PI) / 180));
-      const p = baseParams(q, limit);
-      p.set('viewbox', viewbox({ minLon: near.lon - dLon, maxLon: near.lon + dLon, minLat: near.lat - dLat, maxLat: near.lat + dLat }));
-      p.set('bounded', '1');
-      results = await nominatim(p, { signal, fetchImpl });
-    }
-    if (results.length < 3) {
-      const p = baseParams(q, limit);
-      if (near) p.set('viewbox', viewbox({ minLon: near.lon - 0.5, maxLon: near.lon + 0.5, minLat: near.lat - 0.5, maxLat: near.lat + 0.5 }));
-      results = dedupe([...results, ...(await nominatim(p, { signal, fetchImpl }))]);
-    }
-    return results;
-  }));
+  return cached(key, () =>
+    throttled(async () => {
+      let merged = [];
+      if (near) {
+        for (const km of rings) {
+          const p = baseParams(q, limit);
+          p.set('viewbox', viewbox(box(near, km)));
+          p.set('bounded', '1');
+          const ring = await nominatim(p, { signal, fetchImpl });
+          merged = dedupe([...merged, ...ring]);
+          onProgress?.(merged.map((r) => ({ ...r })));
+          if (ring.length < limit && merged.length >= want) break;
+        }
+      }
+      if (merged.length < 3) {
+        const p = baseParams(q, 10);
+        if (near) p.set('viewbox', viewbox(box(near, 60)));
+        merged = dedupe([...merged, ...(await nominatim(p, { signal, fetchImpl }))]);
+      }
+      return merged;
+    })
+  );
 }
 
 /** Search only inside the given bounds ("search this area"). */
