@@ -42,28 +42,66 @@ function formatResult(r) {
   };
 }
 
+async function nominatim(params, { signal, fetchImpl }) {
+  const res = await fetchImpl(`${ENDPOINT}/search?${params}`, {
+    signal,
+    headers: { Accept: 'application/json', 'Accept-Language': globalThis.navigator?.language || 'en' },
+  });
+  if (!res.ok) throw new Error(`Search failed (${res.status})`);
+  return (await res.json()).map(formatResult);
+}
+
+const baseParams = (q, limit) => new URLSearchParams({ q, format: 'jsonv2', limit: String(limit), addressdetails: '1', dedupe: '1' });
+const viewbox = (b) => `${b.minLon},${b.maxLat},${b.maxLon},${b.minLat}`;
+const dedupe = (list) => {
+  const seen = new Set();
+  return list.filter((r) => {
+    const k = `${r.lat.toFixed(4)},${r.lon.toFixed(4)}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+};
+
 /**
- * Search for places. `near` biases results towards a location
- * (Nominatim viewbox without `bounded`, so far-away matches still appear).
+ * Search for places near a point. Looks inside a box around `near` first so
+ * chains ("Kroger") return the nearby branches, then widens if that found
+ * little. Results are unsorted; callers sort by distance.
  */
-export async function search(query, { near, limit = 6, signal, fetchImpl = globalThis.fetch } = {}) {
+export async function search(query, { near, radiusKm = 30, limit = 10, signal, fetchImpl = globalThis.fetch } = {}) {
   const q = query.trim();
   if (!q) return [];
   const direct = parseLatLon(q);
   if (direct) return [{ label: `${direct.lat.toFixed(5)}, ${direct.lon.toFixed(5)}`, address: 'Coordinates', kind: '', ...direct }];
   return throttled(async () => {
-    const params = new URLSearchParams({ q, format: 'jsonv2', limit: String(limit), addressdetails: '1' });
+    let results = [];
     if (near) {
-      const d = 0.4;
-      params.set('viewbox', `${near.lon - d},${near.lat + d},${near.lon + d},${near.lat - d}`);
+      const dLat = radiusKm / 111;
+      const dLon = dLat / Math.max(0.2, Math.cos((near.lat * Math.PI) / 180));
+      const p = baseParams(q, limit);
+      p.set('viewbox', viewbox({ minLon: near.lon - dLon, maxLon: near.lon + dLon, minLat: near.lat - dLat, maxLat: near.lat + dLat }));
+      p.set('bounded', '1');
+      results = await nominatim(p, { signal, fetchImpl });
     }
-    const res = await fetchImpl(`${ENDPOINT}/search?${params}`, {
-      signal,
-      headers: { Accept: 'application/json', 'Accept-Language': globalThis.navigator?.language || 'en' },
-    });
-    if (!res.ok) throw new Error(`Search failed (${res.status})`);
-    const list = await res.json();
-    return list.map(formatResult);
+    if (results.length < 3) {
+      await new Promise((r) => setTimeout(r, MIN_GAP_MS));
+      const p = baseParams(q, limit);
+      if (near) p.set('viewbox', viewbox({ minLon: near.lon - 0.5, maxLon: near.lon + 0.5, minLat: near.lat - 0.5, maxLat: near.lat + 0.5 }));
+      results = dedupe([...results, ...(await nominatim(p, { signal, fetchImpl }))]);
+    }
+    return results;
+  });
+}
+
+/** Search only inside the given bounds ("search this area"). */
+export async function searchInBounds(query, bounds, { limit = 12, signal, fetchImpl = globalThis.fetch } = {}) {
+  const q = query.trim();
+  if (!q) return [];
+  return throttled(async () => {
+    const p = baseParams(q, limit);
+    p.set('viewbox', viewbox(bounds));
+    p.set('bounded', '1');
+    return nominatim(p, { signal, fetchImpl });
   });
 }
 
