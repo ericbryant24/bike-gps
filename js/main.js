@@ -4,7 +4,7 @@ import { MapView, TILE_SOURCES, DEFAULT_TILES } from './map.js';
 import { bbox, distance, formatDistance, formatDuration, formatSpeed, pointAtDistance, slicePath } from './geo.js';
 import { fetchRoute } from './router.js';
 import { announceableSteps, applyNames, stepIcon, stepsFromGeometry, stepsFromVoiceHints } from './instructions.js';
-import { rateSegments, rateSteps, routeComposition, gradeRuns } from './rating.js';
+import { rateSegments, rateSteps, routeComposition, gradeRuns, GRADES } from './rating.js';
 import { ALTERNATIVE_INDICES, compareAlternatives, dedupeRoutes } from './alternatives.js';
 import { shareUrl, parseSharedRoute, toGpx } from './share.js';
 import { PlaceIndex, INDEX_RADIUS_M } from './places.js';
@@ -306,11 +306,17 @@ function applyRatings() {
   const r = state.route;
   if (!r?.segments?.length) {
     $('route-comp').hidden = true;
+    $('plan-grade').hidden = true;
     map.setRouteGrades(null);
     return;
   }
   const rated = rateSegments(r);
   r.composition = routeComposition(rated);
+  const badge = $('plan-grade');
+  badge.textContent = r.composition.grade;
+  badge.style.background = GRADES[r.composition.grade].color;
+  badge.title = `Bike-friendliness ${r.composition.grade}: ${GRADES[r.composition.grade].label}`;
+  badge.hidden = false;
   rateSteps(state.announceable, rated);
   renderComposition($('route-comp'), r.composition, units());
   map.setRouteGrades(state.mode === 'navigating' ? null : gradeRuns(r, rated));
@@ -1624,6 +1630,17 @@ function openSettings() {
   openModal('Settings', body);
 }
 
+/** The version deployed right now, fetched past every cache; null if offline. */
+async function liveVersion() {
+  try {
+    const res = await fetch(`./js/version.js?live=${Date.now()}`, { cache: 'no-store' });
+    if (!res.ok) return null;
+    return (await res.text()).match(/APP_VERSION\s*=\s*'([^']+)'/)?.[1] || null;
+  } catch {
+    return null;
+  }
+}
+
 /** Last resort: drop the service worker and the app-shell cache, then reload from the network. */
 async function hardRefresh() {
   pill('Reloading…', { spinner: true });
@@ -1656,8 +1673,15 @@ async function checkForUpdates() {
       return;
     }
     await reg.update();
-    const worker = reg.installing || reg.waiting;
+    let worker = reg.installing || reg.waiting;
     if (!worker) {
+      // Belt and braces: read the live version file uncached and compare.
+      const live = await liveVersion();
+      if (live && live !== self.APP_VERSION) {
+        toast(`Updating to version ${live}…`, { duration: 6000 });
+        await hardRefresh();
+        return;
+      }
       toast(`You're on the latest version (${self.APP_VERSION}).`, { action: 'Force reload', onAction: hardRefresh, duration: 8000 });
       return;
     }
@@ -1743,7 +1767,10 @@ window.addEventListener('offline', updateOnline);
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', async () => {
     try {
-      const reg = await navigator.serviceWorker.register('./sw.js');
+      // 'none': the browser must fetch sw.js AND its importScripts (version.js)
+      // from the network on every update check — otherwise a cached version.js
+      // makes a genuinely new build look identical.
+      const reg = await navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' });
       if (!reg) return;
       reg.addEventListener('updatefound', () => {
         const worker = reg.installing;
