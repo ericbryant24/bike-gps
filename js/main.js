@@ -8,6 +8,7 @@ import { rateSegments, rateSteps, routeComposition, gradeRuns, GRADES } from './
 import { ALTERNATIVE_INDICES, compareAlternatives, dedupeRoutes } from './alternatives.js';
 import { shareUrl, parseSharedRoute, toGpx } from './share.js';
 import { PlaceIndex, INDEX_RADIUS_M } from './places.js';
+import { parseMapLink, unshorten } from './links.js';
 import * as bl from './blocklist.js';
 import { Navigator, simulateRide } from './navigator.js';
 import { Voice } from './voice.js';
@@ -1134,12 +1135,61 @@ async function runOsmSearch(q, anchor, { fromInput, ctrl }) {
   if (!results.length && !fromInput) toast('No places found near you.');
 }
 
+// ---- pasted map links (Google / Apple / OSM / geo:) become destinations
+async function handleMapLink(link, { resolved = false } = {}) {
+  $('search-results').hidden = true;
+  if (link.kind === 'coords') {
+    const label = link.label || '';
+    $('search').value = label || 'Pinned location';
+    $('search-clear').hidden = false;
+    $('search').blur();
+    if (label) store.pushRecent({ label, lat: link.lat, lon: link.lon });
+    setDestination({ lat: link.lat, lon: link.lon }, label || undefined);
+    if (link.approx) toast('That link only had a map position, not the exact place — check the pin.', { duration: 5000 });
+    return true;
+  }
+  if (link.kind === 'query') {
+    $('search').value = link.query;
+    $('search-clear').hidden = false;
+    await runSearch(link.query);
+    return true;
+  }
+  if (link.kind === 'short' && !resolved) {
+    pill('Opening map link…', { spinner: true });
+    const full = await unshorten(link.url);
+    hidePill();
+    const parsed = full ? parseMapLink(full) : null;
+    if (parsed && parsed.kind !== 'short') {
+      if (!parsed.label && link.label) parsed.label = link.label;
+      return handleMapLink(parsed, { resolved: true });
+    }
+    if (link.label) {
+      toast(`Couldn't open the short link — searching for “${link.label}” instead.`, { duration: 5000 });
+      return handleMapLink({ kind: 'query', query: link.label });
+    }
+    toast('Short map links can\u2019t be opened here. In Google Maps, use Share and paste the whole message (it includes the place name), or paste the full google.com/maps link.', {
+      duration: 9000,
+      action: 'Open link',
+      onAction: () => window.open(link.url, '_blank', 'noopener'),
+    });
+    return true;
+  }
+  return false;
+}
+
 async function runSearch(q, { fromInput = false } = {}) {
   searchAbort?.abort();
   const ctrl = (searchAbort = new AbortController());
   if (!q.trim()) {
     showRecents();
     return;
+  }
+  if (!fromInput) {
+    const link = parseMapLink(q);
+    if (link) {
+      await handleMapLink(link);
+      return;
+    }
   }
   try {
     // Enter/Go on a query the live suggestions already fetched: commit those
@@ -1376,11 +1426,25 @@ $('search-form').addEventListener('submit', (e) => {
   clearTimeout(searchTimer);
   runSearch($('search').value);
 });
+$('search').addEventListener('paste', (e) => {
+  const text = e.clipboardData?.getData('text') || '';
+  const link = parseMapLink(text);
+  if (!link) return;
+  e.preventDefault();
+  clearTimeout(searchTimer);
+  $('search').value = link.label || link.query || text.trim().split(/\s+/)[0];
+  $('search-clear').hidden = false;
+  handleMapLink(link).catch((err) => reportError(err, 'Could not open that link'));
+});
 $('search').addEventListener('input', (e) => {
   const q = e.target.value;
   $('search-clear').hidden = !q;
   if (q !== state.search.query) $('search-here').hidden = true;
   clearTimeout(searchTimer);
+  if (/https?:\/\/|^geo:/i.test(q)) {
+    $('search-results').hidden = true; // a link: handled on paste / Enter, not as live search
+    return;
+  }
   if (q.trim().length < 3) {
     if (!q.trim()) showRecents();
     return;
@@ -1883,9 +1947,18 @@ function boot() {
 
   const shared = parseSharedRoute(location.hash);
   if (shared) history.replaceState(null, '', location.pathname + location.search);
+  const incoming = new URLSearchParams(location.search);
+  const sharedText = [incoming.get('title'), incoming.get('text'), incoming.get('url')].filter(Boolean).join('\n');
+  if (sharedText) history.replaceState(null, '', location.pathname);
   const last = store.load(store.KEYS.lastRoute);
+  const incomingLink = sharedText ? parseMapLink(sharedText) : null;
   if (shared) loadSharedRoute(shared);
-  else if (last?.route?.points && Date.now() - (last.route.createdAt || 0) < 24 * 3600 * 1000) {
+  else if (incomingLink) setTimeout(() => handleMapLink(incomingLink).catch((e) => reportError(e, 'Could not open that link')), 300);
+  else if (sharedText) {
+    $('search').value = sharedText.split('\n')[0];
+    $('search-clear').hidden = false;
+    setTimeout(() => runSearch($('search').value), 300);
+  } else if (last?.route?.points && Date.now() - (last.route.createdAt || 0) < 24 * 3600 * 1000) {
     state.dest = last.dest;
     state.destLabel = last.destLabel || '';
     state.start = last.start || null;
