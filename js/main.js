@@ -384,6 +384,7 @@ function renderSheet() {
   renderSteps($('steps-list'), state.announceable, units());
   $('sheet').hidden = false;
   $('install-banner').hidden = true;
+  if (state.setSheetCollapsed) state.setSheetCollapsed(!!state.sheetCollapsed, { fit: false });
 }
 
 // --------------------------------------------------------------- navigation
@@ -1574,6 +1575,7 @@ $('simulate-nav').addEventListener('click', () => startNavigation({ simulate: tr
 $('toggle-steps').addEventListener('click', () => {
   const list = $('steps-list');
   list.hidden = !list.hidden;
+  if (!list.hidden && state.sheetCollapsed) state.setSheetCollapsed?.(false, { fit: false });
   $('toggle-steps').setAttribute('aria-expanded', String(!list.hidden));
 });
 $('nav-end').addEventListener('click', endNavigation);
@@ -1763,8 +1765,90 @@ if ('serviceWorker' in navigator) {
   });
 }
 
+// -------------------------------------------------------- bottom sheet drag
+/** Two positions: expanded (everything) and collapsed (summary + Start). Swipe or tap the grip. */
+function setupSheet() {
+  const sheet = $('sheet');
+  const grip = $('sheet-grip');
+  const header = $('plan-summary');
+  const peekHeight = () => grip.offsetHeight + header.offsetHeight + $('plan-actions').offsetHeight + 26;
+  const refit = () => {
+    if (state.route && state.mode === 'idle') {
+      const pts = state.alternatives?.length > 1 ? state.alternatives.flatMap((r) => r.points) : state.route.points;
+      map.fitPoints(pts, { top: 80, bottom: sheet.offsetHeight || 220 });
+    }
+  };
+  const setCollapsed = (on, { fit = true } = {}) => {
+    sheet.style.setProperty('--peek-h', `${peekHeight()}px`);
+    sheet.classList.toggle('collapsed', on);
+    state.sheetCollapsed = on;
+    grip.setAttribute('aria-expanded', String(!on));
+    if (fit) setTimeout(refit, 280);
+  };
+  state.setSheetCollapsed = setCollapsed;
+
+  let drag = null;
+  const onDown = (e) => {
+    if (e.button && e.button !== 0) return;
+    drag = { y0: e.clientY, t0: performance.now(), h0: sheet.offsetHeight, moved: false, target: e.target };
+    sheet.style.setProperty('--peek-h', `${peekHeight()}px`);
+  };
+  const onMove = (e) => {
+    if (!drag) return;
+    const dy = e.clientY - drag.y0;
+    if (!drag.moved && Math.abs(dy) < 6) return;
+    if (!drag.moved) {
+      drag.moved = true;
+      sheet.classList.add('dragging');
+      sheet.classList.remove('collapsed');
+      drag.max = Math.min(sheet.scrollHeight, window.innerHeight * 0.72);
+    }
+    const h = Math.max(peekHeight(), Math.min(drag.max, drag.h0 - dy));
+    sheet.style.maxHeight = `${h}px`;
+    e.preventDefault();
+  };
+  const onUp = (e) => {
+    if (!drag) return;
+    const d = drag;
+    drag = null;
+    sheet.classList.remove('dragging');
+    sheet.style.maxHeight = '';
+    if (!d.moved) {
+      if (d.target.closest('#sheet-grip')) setCollapsed(!state.sheetCollapsed);
+      return; // a plain tap on the header: let clicks (e.g. ✕) through
+    }
+    const dy = e.clientY - d.y0;
+    const dt = Math.max(1, performance.now() - d.t0);
+    const velocity = dy / dt; // px/ms, positive = downwards
+    const mid = (peekHeight() + (d.max || sheet.scrollHeight)) / 2;
+    const collapse = Math.abs(velocity) > 0.4 ? velocity > 0 : d.h0 - dy < mid;
+    setCollapsed(collapse);
+  };
+  for (const el of [grip, header]) {
+    el.addEventListener('pointerdown', onDown);
+    el.addEventListener('pointermove', onMove);
+    el.addEventListener('pointerup', onUp);
+    el.addEventListener('pointercancel', () => {
+      drag = null;
+      sheet.classList.remove('dragging');
+      sheet.style.maxHeight = '';
+    });
+  }
+  // A click on the summary text (not the ✕) also toggles.
+  header.addEventListener('click', (e) => {
+    if (!e.target.closest('button')) setCollapsed(!state.sheetCollapsed);
+  });
+  grip.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      setCollapsed(!state.sheetCollapsed);
+    }
+  });
+}
+
 // ---------------------------------------------------------------------- boot
 function boot() {
+  setupSheet();
   trackSheetHeight($('sheet'), $('nav-bottom'), $('install-banner')); // controls float above whichever is showing
   $('blocklist-count').textContent = String(state.blocklist.length);
   map.renderBlocklist(state.blocklist);
