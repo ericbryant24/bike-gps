@@ -169,7 +169,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 /* ---------- map controls ---------- */
 #map-controls {
   position: absolute; z-index: 1000; right: calc(12px + var(--safe-right));
-  bottom: calc(var(--sheet-h) + 16px + var(--safe-bottom));
+  bottom: min(calc(var(--sheet-h) + 16px + var(--safe-bottom)), calc(100dvh - 300px - var(--safe-top)));
   display: flex; flex-direction: column; gap: 10px; transition: bottom 0.2s;
 }
 .fab {
@@ -217,9 +217,15 @@ button:disabled { opacity: 0.5; cursor: default; }
 .sheet {
   position: absolute; z-index: 1001; left: 0; right: 0; bottom: 0;
   background: var(--panel-solid); border-radius: var(--radius) var(--radius) 0 0; box-shadow: var(--shadow);
-  padding: 6px 16px calc(14px + var(--safe-bottom)); max-height: 72dvh; overflow: auto;
+  padding: 0 16px calc(14px + var(--safe-bottom)); max-height: 72dvh; overflow: auto;
+  transition: max-height 0.25s ease;
 }
-.sheet-handle { width: 40px; height: 4px; border-radius: 2px; background: var(--border); margin: 4px auto 10px; }
+.sheet.dragging { transition: none; user-select: none; }
+.sheet.collapsed { max-height: var(--peek-h, 170px); overflow: hidden; }
+.sheet-grip { padding: 10px 0 8px; touch-action: none; cursor: grab; }
+.sheet-handle { width: 40px; height: 4px; border-radius: 2px; background: var(--border); margin: 0 auto; }
+#plan-summary { touch-action: none; }
+#plan-actions { margin: 8px 0 4px; }
 .stats { font-size: 20px; font-weight: 700; display: flex; gap: 8px; align-items: baseline; }
 .stats .dot { color: var(--muted); font-weight: 400; }
 #plan-ascend { font-size: 15px; font-weight: 500; color: var(--muted); }
