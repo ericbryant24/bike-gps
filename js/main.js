@@ -6,6 +6,7 @@ import { fetchRoute } from './router.js';
 import { announceableSteps, applyNames, stepIcon, stepsFromGeometry, stepsFromVoiceHints } from './instructions.js';
 import { rateSegments, rateSteps, routeComposition, gradeRuns } from './rating.js';
 import { shareUrl, parseSharedRoute, toGpx } from './share.js';
+import { PlaceIndex, INDEX_RADIUS_M } from './places.js';
 import * as bl from './blocklist.js';
 import { Navigator, simulateRide } from './navigator.js';
 import { Voice } from './voice.js';
@@ -876,8 +877,9 @@ const MAX_SHOWN_RESULTS = 15; // nearest N; more just clutters the map
 /** Merge geocoder and OSM hits; the same place from both sources counts once. */
 function mergePlaces(primary, extra) {
   const out = [...primary];
+  const key = (r) => (r.label || '').toLowerCase().replace(/[’‘'`´]/g, '').split(/\s+/)[0];
   for (const p of extra) {
-    const dup = out.some((r) => distance(r, p) < 120 && (r.label || '').toLowerCase().split(' ')[0] === (p.label || '').toLowerCase().split(' ')[0]);
+    const dup = out.some((r) => Number.isFinite(r.lat) && Number.isFinite(p.lat) && distance(r, p) < 150 && key(r) === key(p));
     if (!dup) out.push(p);
   }
   return out;
@@ -904,7 +906,14 @@ async function searchAnchor() {
  */
 function showResults(results, anchor, { commit = false, fit = false } = {}) {
   for (const r of results) if (Number.isFinite(r.lat) && Number.isFinite(r.lon)) r.distance = distance(anchor, r);
-  results.sort((a, b) => (a.distance ?? Infinity) - (b.distance ?? Infinity));
+  // Nearest first, but a fuzzy (tier 3) local match never outranks a solid one,
+  // and roads sit after places at the same tier.
+  const tier = (r) => r.tier ?? 2;
+  const road = (r) => (r.osm === 'tiles=transportation_name' || r.kind === 'road' ? 1 : 0);
+  // Typo-tolerant (tier 3) matches are a fallback: hidden when the name matched
+  // outright (tier 1) or when solid matches aren't scarce.
+  if (results.some((r) => tier(r) === 1) || results.filter((r) => tier(r) <= 2).length >= 3) results = results.filter((r) => tier(r) <= 2);
+  results.sort((a, b) => tier(a) - tier(b) || road(a) - road(b) || (a.distance ?? Infinity) - (b.distance ?? Infinity));
   results = results.slice(0, MAX_SHOWN_RESULTS);
   state.search.results = results;
   state.search.anchor = anchor;
@@ -922,6 +931,44 @@ function showResults(results, anchor, { commit = false, fit = false } = {}) {
   state.search.center = map.center;
   state.search.zoom = map.zoom;
   $('search-here').hidden = true;
+}
+
+// ---- on-device place index (built from the map's own vector tiles)
+let placeIndex = null;
+async function tileTemplate() {
+  const src = map.map.getSource('openmaptiles');
+  if (src?.tiles?.[0]) return src.tiles[0];
+  if (src?.url) {
+    const res = await fetch(src.url);
+    const tj = await res.json();
+    if (tj?.tiles?.[0]) return tj.tiles[0];
+  }
+  throw new Error('no vector tiles');
+}
+
+/** Make sure the local index covers `anchor`; builds (with progress) when it doesn't. */
+async function ensurePlaceIndex(anchor, { quiet = false, signal, radius = INDEX_RADIUS_M } = {}) {
+  if (!placeIndex) {
+    try {
+      placeIndex = new PlaceIndex({ tileUrl: await tileTemplate() });
+    } catch {
+      return null; // raster style / offline without tiles: geocoders only
+    }
+  }
+  if (placeIndex.covers(anchor)) return placeIndex;
+  if (!quiet) pill('Indexing places near you…', { spinner: true });
+  try {
+    await placeIndex.build(anchor, {
+      radius,
+      signal,
+      onProgress: (done, total) => !quiet && pill(`Indexing places near you… ${Math.round((100 * done) / total)}%`, { spinner: true }),
+    });
+    return placeIndex;
+  } catch {
+    return placeIndex.entries.length ? placeIndex : null;
+  } finally {
+    if (!quiet) hidePill();
+  }
 }
 
 const mapboxToken = () => (state.settings.mapboxToken || '').trim();
@@ -956,19 +1003,43 @@ async function runMapboxSearch(q, anchor, { fromInput, ctrl }) {
 
 async function runOsmSearch(q, anchor, { fromInput, ctrl }) {
   let shown = false;
-  const present = (list, done) => {
+  let local = [];
+  const present = (extra, done) => {
     if (ctrl.signal.aborted) return;
+    const list = mergePlaces(local, extra);
     showResults(list, anchor, { commit: !fromInput, fit: !fromInput && !shown });
     shown = shown || list.length > 0;
     if (done && !fromInput) hidePill();
   };
+  // 1) Nearby places from the tiles on this device — instant once indexed.
+  //    While typing, an index that isn't built yet is built quietly in the
+  //    background and the list refreshes when it lands.
+  const covered = placeIndex?.covers(anchor);
+  if (covered) local = placeIndex.search(q, anchor);
+  else if (!fromInput) {
+    const idx = await ensurePlaceIndex(anchor, { signal: ctrl.signal });
+    if (ctrl.signal.aborted) return;
+    local = idx ? idx.search(q, anchor) : [];
+    if (!fromInput) pill('Searching…', { spinner: true });
+  } else {
+    ensurePlaceIndex(anchor, { quiet: true })
+      .then((idx) => {
+        if (idx && !ctrl.signal.aborted && $('search').value === q) {
+          local = idx.search(q, anchor);
+          present([], false);
+        }
+      })
+      .catch(() => {});
+  }
+  if (local.length) present([], false);
+  // 2) Geocoders add addresses and places beyond the indexed radius.
   const [geo, osm] = await Promise.all([
-    geocode.search(q, { near: anchor, signal: ctrl.signal, onProgress: (list) => present(list, false) }),
-    overpass.placesNamed(q, anchor, { signal: ctrl.signal }),
+    geocode.search(q, { near: anchor, signal: ctrl.signal, onProgress: (list) => present(list, false) }).catch(() => []),
+    local.length >= 3 ? Promise.resolve([]) : overpass.placesNamed(q, anchor, { signal: ctrl.signal }),
   ]);
   if (ctrl.signal.aborted) return;
-  const results = mergePlaces(geo, osm);
-  present(results, true);
+  const results = mergePlaces(local, mergePlaces(geo, osm));
+  present(mergePlaces(geo, osm), true);
   if (!results.length && !fromInput) toast('No places found near you.');
 }
 
@@ -994,23 +1065,7 @@ async function runSearch(q, { fromInput = false } = {}) {
       await runMapboxSearch(q, anchor, { fromInput, ctrl });
       return;
     }
-    let shown = false;
-    const present = (list, done) => {
-      if (ctrl.signal.aborted) return;
-      showResults(list, anchor, { commit: !fromInput, fit: !fromInput && !shown });
-      shown = shown || list.length > 0;
-      if (done && !fromInput) hidePill();
-    };
-    // Nominatim rings (nearest first) plus an exhaustive OSM name lookup
-    // nearby; whichever answers first is shown and the other is merged in.
-    const [geo, osm] = await Promise.all([
-      geocode.search(q, { near: anchor, signal: ctrl.signal, onProgress: (list) => present(list, false) }),
-      overpass.placesNamed(q, anchor, { signal: ctrl.signal }),
-    ]);
-    if (ctrl.signal.aborted) return;
-    const results = mergePlaces(geo, osm);
-    present(results, true);
-    if (!results.length && !fromInput) toast('No places found near you.');
+    await runOsmSearch(q, anchor, { fromInput, ctrl });
   } catch (e) {
     if (!fromInput) reportError(e, 'Search failed');
   } finally {
@@ -1024,7 +1079,16 @@ async function searchHere() {
   $('search-here').hidden = true;
   pill('Searching this area…', { spinner: true });
   try {
-    const results = mapboxToken() ? await geocode.mapboxForward(q, { token: mapboxToken(), bounds: map.bounds, near: map.center }) : await geocode.searchInBounds(q, map.bounds);
+    let results;
+    if (mapboxToken()) results = await geocode.mapboxForward(q, { token: mapboxToken(), bounds: map.bounds, near: map.center });
+    else {
+      const b = map.bounds;
+      const radius = Math.min(8000, Math.max(1500, distance({ lat: b.minLat, lon: b.minLon }, { lat: b.maxLat, lon: b.maxLon }) / 2));
+      const idx = await ensurePlaceIndex(map.center, { radius });
+      const local = idx ? idx.search(q, map.center).filter((r) => r.lat >= b.minLat && r.lat <= b.maxLat && r.lon >= b.minLon && r.lon <= b.maxLon) : [];
+      const geo = await geocode.searchInBounds(q, map.bounds).catch(() => []);
+      results = mergePlaces(local, geo);
+    }
     const anchor = state.lastFix && Date.now() - state.lastFix.timestamp < RECENT_FIX_MS ? state.lastFix : map.center;
     showResults(results, anchor, { commit: true, fit: false });
     if (!results.length) toast(`No "${q}" here.`);
@@ -1661,4 +1725,4 @@ function boot() {
 boot();
 
 // Exposed for debugging in the console.
-window.bikeGps = { state, map, planRoute, reroute };
+window.bikeGps = { state, map, planRoute, reroute, get placeIndex() { return placeIndex; } };
