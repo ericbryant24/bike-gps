@@ -7,7 +7,7 @@ import { announceableSteps, applyNames, stepIcon, stepsFromGeometry, stepsFromVo
 import { rateSegments, rateSteps, routeComposition, gradeRuns, GRADES } from './rating.js';
 import { ALTERNATIVE_INDICES, compareAlternatives, dedupeRoutes } from './alternatives.js';
 import { shareUrl, parseSharedRoute, toGpx } from './share.js';
-import { PlaceIndex, INDEX_RADIUS_M } from './places.js';
+import { PlaceIndex, INDEX_RADIUS_M, looksLikeAddress } from './places.js';
 import { parseMapLink, unshorten } from './links.js';
 import * as bl from './blocklist.js';
 import { Navigator, simulateRide } from './navigator.js';
@@ -970,8 +970,14 @@ const MAX_SHOWN_RESULTS = 15; // nearest N; more just clutters the map
 function mergePlaces(primary, extra) {
   const out = [...primary];
   const key = (r) => (r.label || '').toLowerCase().replace(/[’‘'`´]/g, '').split(/\s+/)[0];
+  const isRoad = (r) => r.kind === 'road' || /^highway=/.test(r.osm || '') || r.osm === 'tiles=transportation_name';
+  const roadName = (r) => (r.label || '').toLowerCase().replace(/[’‘'`´.]/g, '');
   for (const p of extra) {
-    const dup = out.some((r) => Number.isFinite(r.lat) && Number.isFinite(p.lat) && distance(r, p) < 150 && key(r) === key(p));
+    const dup = out.some(
+      (r) =>
+        (Number.isFinite(r.lat) && Number.isFinite(p.lat) && distance(r, p) < 150 && key(r) === key(p)) ||
+        (isRoad(r) && isRoad(p) && roadName(r) === roadName(p)) // the same street from tiles and geocoder, different segments
+    );
     if (!dup) out.push(p);
   }
   return out;
@@ -1096,8 +1102,12 @@ async function runMapboxSearch(q, anchor, { fromInput, ctrl }) {
 async function runOsmSearch(q, anchor, { fromInput, ctrl }) {
   let shown = false;
   let local = [];
+  // For "4457 Rosemary Pkwy" the geocoder's house is the answer; the tile
+  // index only knows the parkway, so the house outranks it.
+  const houseNo = looksLikeAddress(q) ? q.trim().match(/^\S+/)[0].toLowerCase() : null;
   const present = (extra, done) => {
     if (ctrl.signal.aborted) return;
+    if (houseNo) for (const r of extra) if ((r.label || '').toLowerCase().startsWith(`${houseNo} `)) r.tier = 1;
     const list = mergePlaces(local, extra);
     showResults(list, anchor, { commit: !fromInput, fit: !fromInput && !shown });
     shown = shown || list.length > 0;

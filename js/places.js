@@ -22,6 +22,25 @@ const KIND = {
 const LAYERS = Object.keys(KIND);
 
 /** Lowercase, accent-free, apostrophes removed, other punctuation → spaces. */
+/** Postal abbreviations people type that OSM names spell out ("pkwy" is not a prefix of "parkway"). */
+export const STREET_ABBREV = Object.freeze({
+  pkwy: 'parkway', pky: 'parkway', blvd: 'boulevard', hwy: 'highway', rd: 'road', dr: 'drive', ln: 'lane', ct: 'court', cir: 'circle',
+  ter: 'terrace', trce: 'trace', pl: 'place', sq: 'square', ave: 'avenue', av: 'avenue', mt: 'mount', ft: 'fort', xing: 'crossing', trl: 'trail',
+  expy: 'expressway', fwy: 'freeway', tpke: 'turnpike', hts: 'heights', jct: 'junction',
+});
+
+/** "4457 Rosemary Pkwy" → "4457 Rosemary Parkway" (case kept, tokens only). */
+export function expandAbbreviations(q) {
+  return String(q || '').replace(/\b([a-z]+)\.?(?=\s|$)/gi, (m, tok) => {
+    const full = STREET_ABBREV[tok.toLowerCase()];
+    if (!full) return m;
+    return tok[0] === tok[0].toUpperCase() ? full[0].toUpperCase() + full.slice(1) : full;
+  });
+}
+
+/** A query that starts with a house number: "4457 Rosemary Pkwy". */
+export const looksLikeAddress = (q) => /^\d+[a-z]?(?:[-/]\d+[a-z]?)?\s+\p{L}/iu.test(String(q || '').trim());
+
 export function normalize(s) {
   return String(s || '')
     .normalize('NFD')
@@ -29,7 +48,10 @@ export function normalize(s) {
     .toLowerCase()
     .replace(/[’‘ʼ'`´]/g, '')
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
-    .trim();
+    .trim()
+    .split(' ')
+    .map((t) => STREET_ABBREV[t] || t)
+    .join(' ');
 }
 
 function centroid(rings) {
@@ -55,6 +77,9 @@ export function extractPlaces(layers) {
       const p = f.properties || {};
       const name = p.name || p['name:latin'];
       if (!name) continue;
+      // Transit stops are numerous and named after the streets they sit on
+      // ("Cleveland Ave & Huy Rd"): they'd swamp searches for those streets.
+      if (layer === 'poi' && /^(bus_stop|tram_stop)$/.test(p.subclass || '')) continue;
       let pt = null;
       if (f.type === 1) pt = f.geometry[0];
       else if (f.type === 2) {
@@ -183,7 +208,8 @@ export class PlaceIndex {
 
   /** Query the index; results in the app's search-result shape, nearest first within match tier. */
   search(query, anchor, { limit = 15 } = {}) {
-    const nq = normalize(query);
+    // Tiles carry no house numbers: "4457 Rosemary Pkwy" finds the parkway itself.
+    const nq = normalize(query).replace(/^\d+[a-z]?\s+(?=\S)/, '');
     if (nq.length < 2) return [];
     const qTokens = nq.split(' ');
     const hits = [];
