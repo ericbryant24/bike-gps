@@ -9,6 +9,7 @@ No build step, no API keys, no backend: it's static HTML/CSS/JS that deploys str
 - **Turn-by-turn guidance** with a large maneuver banner, "then…" preview, spoken prompts (Web Speech API), speed, distance remaining and ETA.
 - **3D heading-up navigation view**: the map rotates with your direction of travel and tilts to a perspective view with 3D buildings (MapLibre GL + OpenFreeMap vector tiles). Tap the compass to switch to flat north-up.
 - **Bike-specific routing** via [BRouter](https://brouter.de) — balanced / fast / safest / shortest profiles, with elevation-aware timing.
+- **Route options**: after the main route appears, BRouter's alternatives are fetched, thinned to ones that actually differ, and listed side by side with distance, time, overall grade and metres on busy roads (grades D/E). The quietest, fastest and shortest get badges, the unchosen routes sit as grey lines on the map, and tapping a row or a line switches the plan. The profile is still a cost trade-off, so this is how you see whether a longer, calmer route exists.
 - **Road blocklist** — every block is previewed in orange with its name, length, junctions and traffic lights before you confirm it.
   - *Whole road*: tap a road to block every way with that name within 2 / 5 / 10 km of the tap.
   - *Stretch*: tap two points; the stretch of road between them is traced along the road network and blocked.
@@ -67,6 +68,7 @@ js/
   geo.js              pure geometry (haversine, snapping, simplification…)
   router.js           BRouter client (URL building, response and segment parsing)
   rating.js           bike-friendliness grading of route segments
+  alternatives.js     alternative-route dedupe and traffic-exposure comparison
   share.js            route links (encoded polyline) and GPX export
   mvt.js              minimal Mapbox Vector Tile decoder
   places.js           on-device place index (tiles → fuzzy nearest-first search)

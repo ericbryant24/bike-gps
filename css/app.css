@@ -389,3 +389,22 @@ button:disabled { opacity: 0.5; cursor: default; }
 
 #shared-note .text-btn { padding: 2px 6px; }
 #share-route { min-width: 48px; font-size: 20px; padding: 0 12px; }
+
+/* ---------- alternative routes ---------- */
+.alts { margin: 0 0 10px; }
+.alts-head { font-weight: 600; margin-bottom: 6px; }
+.alts-pending { margin-bottom: 4px; }
+.alt {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; cursor: pointer;
+  border: 1px solid var(--border); background: transparent; color: var(--fg); border-radius: var(--radius-sm); padding: 8px 10px; margin-bottom: 6px;
+  font: inherit;
+}
+.alt.active { border-color: var(--accent); background: var(--accent-soft); }
+.alt .grade { flex: none; }
+.alt-body { min-width: 0; flex: 1; }
+.alt-stats { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; font-weight: 600; font-size: 15px; }
+.alt-stats .dot { color: var(--muted); font-weight: 400; }
+.alt-badge { margin-left: 0; font-weight: 600; }
+.alt-badge.quiet { background: #16a34a; color: #fff; }
+.alt-busy { font-size: 12.5px; margin-top: 2px; }
+.alt-busy.none { color: #16a34a; }

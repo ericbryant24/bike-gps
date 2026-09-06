@@ -64,6 +64,7 @@ export function parseRoute(body, meta = {}) {
     cost: Number(props.cost) || 0,
     voicehints: Array.isArray(props.voicehints) ? props.voicehints : null,
     profile: meta.profile || null,
+    alternative: Number(meta.alternative) || 0,
     from: meta.from || points[0],
     to: meta.to || points[points.length - 1],
     nogoIds: meta.nogoIds || [],
@@ -155,7 +156,7 @@ export async function fetchRoute(params, { fetchImpl = globalThis.fetch, signal,
     const res = await fetchImpl(url, { signal: ctrl.signal });
     const text = await res.text();
     if (!res.ok && !text.trim().startsWith('{')) throw routingError(text || `Routing failed (${res.status})`);
-    return parseRoute(text, { profile: params.profile, from: params.from, to: params.to, nogoIds: params.nogoIds });
+    return parseRoute(text, { profile: params.profile, from: params.from, to: params.to, nogoIds: params.nogoIds, alternative: params.alternative });
   } finally {
     clearTimeout(timer);
   }
