@@ -7,7 +7,7 @@
 
 /* global maplibregl */
 
-import { cumulativeDistances, destination, distance, snapToPath } from './geo.js';
+import { cameraShouldMove, cumulativeDistances, destination, distance, snapToPath } from './geo.js';
 
 const OFM = 'https://tiles.openfreemap.org/styles';
 const OSM_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
@@ -284,6 +284,10 @@ export class MapView {
       mk.setRotation(heading);
     } else cone.hidden = true;
     if (this.follow) {
+      // Stationary at a light: GPS jitter is not movement, so let the GPU idle.
+      const next = { lat: p.lat, lon: p.lon, heading: this.courseUp ? heading : null };
+      if (!cameraShouldMove(this.followedFix, next)) return;
+      this.followedFix = next;
       // Carry the whole navigation camera each time: a fresh easeTo cancels the
       // one in flight, so a centre-only ease would freeze zoom/pitch mid-way.
       const cam = { center: lnglat(p), duration: 600, easing: (t) => t, ...this.navCamera() };
@@ -307,6 +311,7 @@ export class MapView {
   setFollow(on, p, { courseUp = true, heading = null, zoom = NAV_ZOOM } = {}) {
     this.follow = on;
     this.courseUp = courseUp;
+    this.followedFix = null; // next fix always re-frames the camera
     if (!on) {
       this.map.setPadding({ top: 0, bottom: 0, left: 0, right: 0 });
       return;

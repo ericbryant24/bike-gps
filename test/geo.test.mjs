@@ -86,3 +86,14 @@ test('formatting', () => {
   assert.equal(g.compassName(324.8), 'northwest');
   assert.equal(g.speakDistance(480, 'imperial'), 'a quarter mile');
 });
+
+test('cameraShouldMove skips GPS jitter while stationary but follows real movement', () => {
+  const p = { lat: 40.0, lon: -83.0, heading: 90 };
+  assert.equal(g.cameraShouldMove(null, p), true);
+  assert.equal(g.cameraShouldMove(p, { lat: 40.00001, lon: -83.00001, heading: 91 }), false); // ~1.4 m, 1°
+  assert.equal(g.cameraShouldMove(p, { lat: 40.00005, lon: -83.0, heading: 90 }), true); // ~5.5 m
+  assert.equal(g.cameraShouldMove(p, { lat: 40.0, lon: -83.0, heading: 100 }), true); // turned 10°
+  assert.equal(g.cameraShouldMove(p, { lat: 40.0, lon: -83.0, heading: null }), true); // heading lost
+  assert.equal(g.cameraShouldMove({ lat: 40, lon: -83, heading: null }, { lat: 40, lon: -83, heading: null }), false);
+  assert.equal(g.cameraShouldMove(p, { lat: 40.00001, lon: -83.0, heading: 92 }, { minTurn: 1 }), true);
+});

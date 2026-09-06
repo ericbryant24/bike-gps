@@ -52,7 +52,7 @@ const map = new MapView($('map'), {
   zoom: savedView?.zoom || 13,
   tiles: state.settings.tiles,
 });
-const courseUp = () => state.settings.navView !== 'north';
+const courseUp = () => state.settings.navView !== 'north' && !state.settings.batterySaver;
 
 // ------------------------------------------------------------------ helpers
 const units = () => state.settings.units;
@@ -1511,6 +1511,10 @@ function updateCompass() {
 map.onBearing = updateCompass;
 $('compass-btn').addEventListener('click', () => {
   if (state.mode === 'navigating') {
+    if (state.settings.batterySaver && !courseUp()) {
+      toast('Battery saver keeps the map flat. Turn it off in Settings for the 3D view.', { duration: 4000 });
+      return;
+    }
     state.settings.navView = courseUp() ? 'north' : '3d';
     saveSettings();
     const fix = state.lastFix || state.route?.from;
@@ -1669,7 +1673,7 @@ function openSettings() {
       if (key === 'tiles') map.setTiles(value);
       if (key === 'voice') voice.enabled = !!value;
       if (key === 'units') renderSheet();
-      if (key === 'navView' && state.mode === 'navigating') {
+      if ((key === 'navView' || key === 'batterySaver') && state.mode === 'navigating') {
         map.setFollow(true, state.lastFix || state.route?.from, { courseUp: courseUp(), heading: state.nav?.state?.bearing ?? null });
         updateCompass();
       }

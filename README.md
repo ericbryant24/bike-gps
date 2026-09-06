@@ -25,6 +25,7 @@ No build step, no API keys, no backend: it's static HTML/CSS/JS that deploys str
 - **Optional Mapbox search**: paste a Mapbox public token in Settings to use the Mapbox Search Box API instead (note: Mapbox requires a payment method on file even for its free tier).
 - **Search** anchored to *your location* regardless of where the map is: suggestions appear as you type without moving the map; Enter/Go sorts results by distance from you, drops numbered pins and fits them into view; "Search this area" (after you pan) is the only search that uses the visible map instead.
 - **Automatic rerouting** when you leave the route, with GPS-glitch tolerance.
+- **Battery**: idle, the app runs no GPS watch, timers or polling. While navigating the follow camera only moves when you actually move or turn (GPS jitter at a red light no longer keeps the GPU drawing), and a *Battery saver* setting keeps the map flat and north-up, which is much cheaper to render than the tilted 3D view. The avoid-this-road control in the ride HUD is a compact ⛔ button.
 - **Ride simulator** to preview guidance (and rerouting) without leaving your desk.
 - **Offline-capable PWA**: app shell cached, recently viewed map tiles + fonts/sprites cached (LRU), last route restored on launch, screen wake-lock while navigating, install prompt.
 - **Map styles**: OpenFreeMap Liberty / Bright / Positron (vector, 3D), plus raster OpenStreetMap, CyclOSM (bike infrastructure), Carto Voyager / Dark. UI follows the system light/dark theme.

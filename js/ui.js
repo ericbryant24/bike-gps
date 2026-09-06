@@ -251,6 +251,7 @@ export function renderSettings(settings, onChange, { onClearTiles, onCheckUpdate
       select('offRouteMeters', [['25', '25 m (strict)'], ['40', '40 m'], ['60', '60 m'], ['100', '100 m (relaxed)']])
     ),
     setting('Keep screen on', 'While navigating', toggle(settings.keepAwake, (v) => onChange('keepAwake', v))),
+    setting('Battery saver', 'Flat north-up map while riding (the tilted 3D view is the biggest drain after the screen itself)', toggle(settings.batterySaver, (v) => onChange('batterySaver', v))),
     setting(
       'Routing server',
       'BRouter-compatible endpoint',
