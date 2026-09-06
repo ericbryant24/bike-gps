@@ -1149,9 +1149,11 @@ async function handleMapLink(link, { resolved = false } = {}) {
     return true;
   }
   if (link.kind === 'query') {
-    $('search').value = link.query;
+    const shown = link.name || link.query;
+    $('search').value = shown;
     $('search-clear').hidden = false;
-    await runSearch(link.query);
+    if (link.address && (await destinationFromAddress(link))) return true;
+    await runSearch(shown);
     return true;
   }
   if (link.kind === 'short' && !resolved) {
@@ -1175,6 +1177,36 @@ async function handleMapLink(link, { resolved = false } = {}) {
     return true;
   }
   return false;
+}
+
+/**
+ * A Google share link usually names the place and its street address but
+ * carries no coordinates. Pin the address, then snap to the named place if
+ * the on-device index knows one within a short walk of it.
+ */
+async function destinationFromAddress(link) {
+  pill('Locating address…', { spinner: true });
+  let hit = null;
+  try {
+    hit = await geocode.geocodeAddress(link.address);
+  } catch {
+    hit = null;
+  } finally {
+    hidePill();
+  }
+  if (!hit) return false;
+  let p = { lat: hit.lat, lon: hit.lon };
+  const label = link.name || hit.label;
+  if (link.name && placeIndex?.covers(p)) {
+    const q = link.name.replace(/\s+[-–—]\s+.*$/, ''); // "Pub - Old Worthington" → "Pub"
+    const near = placeIndex.search(q, p, { limit: 5 }).find((r) => r.tier <= 2 && r.distance < 200);
+    if (near) p = { lat: near.lat, lon: near.lon };
+  }
+  $('search-results').hidden = true;
+  $('search').blur();
+  store.pushRecent({ label, lat: p.lat, lon: p.lon });
+  setDestination(p, label);
+  return true;
 }
 
 async function runSearch(q, { fromInput = false } = {}) {
