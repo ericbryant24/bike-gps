@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spellingVariants, parseLatLon } from '../js/geocode.js';
+import { spellingVariants, parseLatLon, geocodeAddress } from '../js/geocode.js';
 
 test('spelling variants cover straight and curly apostrophes', () => {
   assert.deepEqual(spellingVariants('whits'), ["whit's", 'whit\u2019s']);
@@ -38,4 +38,19 @@ test('Mapbox results normalise to our shape', async () => {
   assert.equal(f[0].lat, 40);
   assert.ok(calls[1].includes('bbox=-84%2C39%2C-82%2C41'));
   await assert.rejects(mapboxSuggest('x', { token: 'bad', session: 's', fetchImpl: async () => ({ ok: false, status: 401 }) }), MapboxAuthError);
+});
+
+test('geocodeAddress prefers Nominatim and only trusts Photon with a matching house number', async () => {
+  const nom = [{ lat: '40.0874016', lon: '-83.0182767', name: '', display_name: '663, North High Street, Worthington, Ohio', address: { road: 'North High Street', city: 'Worthington', state: 'Ohio' }, type: 'house', class: 'place' }];
+  const fetchNom = async (url) => (/nominatim/.test(url) ? { ok: true, status: 200, json: async () => nom } : { ok: false, status: 500 });
+  const a = await geocodeAddress('663 N High St, Worthington, OH 43085', { fetchImpl: fetchNom });
+  assert.equal(a.lat, 40.0874016);
+  const photon = { features: [
+    { properties: { name: 'Bus stop', housenumber: '', street: 'North High Street', osm_key: 'highway', osm_value: 'bus_stop' }, geometry: { coordinates: [-83.01, 40.09] } },
+    { properties: { housenumber: '663', street: 'North High Street', city: 'Worthington', osm_key: 'building', osm_value: 'yes' }, geometry: { coordinates: [-83.0183, 40.0874] } },
+  ] };
+  const fetchPhoton = async (url) => (/nominatim/.test(url) ? { ok: false, status: 503 } : { ok: true, status: 200, json: async () => photon });
+  const b = await geocodeAddress('663 N High St, Worthington, OH 43085', { fetchImpl: fetchPhoton });
+  assert.equal(b.lon, -83.0183);
+  assert.equal(await geocodeAddress('1 Nowhere Rd', { fetchImpl: async () => ({ ok: false, status: 503 }) }), null);
 });

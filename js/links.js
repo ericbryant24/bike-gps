@@ -24,6 +24,22 @@ const latLonIn = (s) => {
   return m ? [Number(m[1]), Number(m[2])] : null;
 };
 
+/**
+ * Google's share links often carry no coordinates, only
+ * "q=Name, 663 N High St, Worthington, OH 43085, United States". Split that
+ * into the place name and the postal address (the address starts at the first
+ * comma-separated part that begins with a house number).
+ */
+export function splitPlaceQuery(q) {
+  const parts = String(q || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const at = parts.findIndex((s) => /^\d+[a-z]?(?:[-/]\d+[a-z]?)?\s+\S/i.test(s));
+  if (at < 0 || parts.length - at < 2) return { name: parts.join(', '), address: '' };
+  return { name: parts.slice(0, at).join(', '), address: parts.slice(at).join(', ') };
+}
+
 /** The place name a share sheet puts next to the link ("Whit's Frozen Custard\nhttps://maps.app.goo.gl/…"). */
 export function labelFromText(text) {
   const rest = String(text).replace(new RegExp(URL_RE.source, 'gi'), ' ');
@@ -45,7 +61,8 @@ function parseGoogle(u, url, label) {
   if (!name && dir && !latLonIn(dir[1])) name = dir[1];
   const q = u.searchParams.get('q') || u.searchParams.get('query') || u.searchParams.get('destination') || u.searchParams.get('daddr') || '';
   const nameLooksLikeCoords = latLonIn(name);
-  const finalLabel = (!nameLooksLikeCoords && name) || (!latLonIn(q) && pretty(q)) || label;
+  const split = splitPlaceQuery(latLonIn(q) ? '' : pretty(q));
+  const finalLabel = (!nameLooksLikeCoords && name) || split.name || split.address || label;
 
   // Exact place position lives in the data blob; "@lat,lng" is only the map centre.
   const blob = url.match(/!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/);
@@ -57,6 +74,7 @@ function parseGoogle(u, url, label) {
   if (nameLooksLikeCoords) return coords(nameLooksLikeCoords[0], nameLooksLikeCoords[1], label);
   const at = url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
   if (at && (place || dir)) return coords(Number(at[1]), Number(at[2]), finalLabel, true);
+  if (split.address) return { kind: 'query', query: `${split.name ? `${split.name}, ` : ''}${split.address}`, name: split.name, address: split.address };
   if (finalLabel && !/^https?:/i.test(finalLabel)) return { kind: 'query', query: finalLabel };
   if (at) return coords(Number(at[1]), Number(at[2]), label, true);
   return null;
@@ -109,6 +127,13 @@ export function parseMapLink(text) {
   const host = u.hostname.toLowerCase();
   if (host === 'maps.app.goo.gl' || host === 'goo.gl' || host === 'g.co') return { kind: 'short', url: raw, label };
   if (/(^|\.)google\.[a-z.]+$/.test(host)) {
+    // Unshorteners abroad get bounced through the cookie-consent page, which
+    // carries the real destination in ?continue=.
+    const cont = u.searchParams.get('continue');
+    if (cont && /^https?:\/\//i.test(cont)) {
+      const inner = parseMapLink(label ? `${label}\n${cont}` : cont);
+      if (inner) return inner;
+    }
     if (u.searchParams.get('cid') && !u.searchParams.get('q')) return { kind: 'short', url: raw, label }; // opaque place id: needs the redirect
     return parseGoogle(u, raw, label);
   }

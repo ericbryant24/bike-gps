@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseMapLink, labelFromText, unshorten } from '../js/links.js';
+import { parseMapLink, labelFromText, unshorten, splitPlaceQuery } from '../js/links.js';
 
 test('full Google Maps place link: exact coordinates from the data blob, name from the path', () => {
   const r = parseMapLink("https://www.google.com/maps/place/Whit's+Frozen+Custard/@40.0329,-83.0189,17z/data=!3m1!4b1!4m6!3m5!1s0x8838:0x1!8m2!3d40.0323456!4d-83.0165432!16s");
@@ -58,4 +58,18 @@ test('unshorten uses the service response and fails soft', async () => {
   assert.equal(parseMapLink(ok).lat, 1.5);
   assert.equal(await unshorten('https://maps.app.goo.gl/x', { fetchImpl: async () => ({ ok: false }) }), null);
   assert.equal(await unshorten('https://maps.app.goo.gl/x', { fetchImpl: async () => { throw new Error('offline'); } }), null);
+});
+
+test('real Google share link: consent wrapper unwrapped, name and street address split', () => {
+  const consent = 'https://consent.google.com/ml?continue=https://maps.google.com/maps?q%3DThe%2BOld%2BBag%2Bof%2BNails%2BPub%2B-%2BOld%2BWorthington,%2B663%2BN%2BHigh%2BSt,%2BWorthington,%2BOH%2B43085,%2BUnited%2BStates%26ftid%3D0x88388cc63979feef:0xb706cd9cac414c77%26entry%3Dgps&gl=FI&m=0&pc=m&hl=fi&src=1';
+  const r = parseMapLink(consent);
+  assert.equal(r.kind, 'query');
+  assert.equal(r.name, 'The Old Bag of Nails Pub - Old Worthington');
+  assert.equal(r.address, '663 N High St, Worthington, OH 43085, United States');
+  const direct = parseMapLink('https://maps.google.com/maps?q=The+Old+Bag+of+Nails+Pub+-+Old+Worthington,+663+N+High+St,+Worthington,+OH+43085,+United+States&ftid=0x1:0x2&entry=gps&g_st=ic');
+  assert.deepEqual(direct, r);
+  assert.deepEqual(splitPlaceQuery('663 N High St, Worthington, OH'), { name: '', address: '663 N High St, Worthington, OH' });
+  assert.deepEqual(splitPlaceQuery('Goodale Park'), { name: 'Goodale Park', address: '' });
+  assert.equal(parseMapLink('https://maps.google.com/maps?q=Goodale+Park').query, 'Goodale Park');
+  assert.equal(parseMapLink('https://maps.app.goo.gl/w1C5a3mrGbtbnTfK9?g_st=ic').kind, 'short');
 });

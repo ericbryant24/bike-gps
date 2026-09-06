@@ -233,6 +233,34 @@ export async function search(query, { near, rings = [4, 12, 30], limit = 40, wan
   });
 }
 
+/**
+ * Pin a postal address ("663 N High St, Worthington, OH 43085"). Nominatim
+ * resolves house numbers well; Photon is only trusted as a fallback when it
+ * returns the same house number.
+ */
+export async function geocodeAddress(address, { signal, fetchImpl = globalThis.fetch } = {}) {
+  const q = String(address || '').trim();
+  if (!q) return null;
+  const houseNo = q.match(/^\d+[a-z]?/i)?.[0]?.toLowerCase();
+  try {
+    const hits = await throttled(() => nominatim(baseParams(q, 3), { signal, fetchImpl }));
+    if (hits.length) return hits[0];
+  } catch (e) {
+    if (signal?.aborted) throw e;
+  }
+  try {
+    const p = new URLSearchParams({ q, limit: '5', lang: (globalThis.navigator?.language || 'en').slice(0, 2) });
+    const res = await fetchImpl(`${PHOTON}?${p}`, { signal, headers: { Accept: 'application/json' } });
+    if (!res.ok) return null;
+    const json = await res.json();
+    const f = (json.features || []).find((x) => !houseNo || String(x.properties?.housenumber || '').toLowerCase() === houseNo);
+    return f ? formatPhoton(f) : null;
+  } catch (e) {
+    if (signal?.aborted) throw e;
+    return null;
+  }
+}
+
 /** Search only inside the given bounds ("search this area"). */
 export async function searchInBounds(query, bounds, { limit = 12, signal, fetchImpl = globalThis.fetch } = {}) {
   const q = query.trim();
