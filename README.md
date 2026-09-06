@@ -19,6 +19,7 @@ No build step, no API keys, no backend: it's static HTML/CSS/JS that deploys str
   - Entries can be toggled, renamed, resized, exported/imported as JSON, and are stored on-device.
 - **Road ratings**: every stretch of a planned route is graded A–E for bike-friendliness from its OpenStreetMap tags (separated path → quiet street → moderate → busy → major road, adjusted for bike lanes, protected lanes, signed cycle routes, speed limits and unpaved surfaces). The route is coloured by grade on the map, the summary shows a composition bar and overall grade, and each turn-by-turn step shows its road's grade, description and the lights/stops on it.
 - **Tap a place on the map** (shop, park, café… from the tile data) to see its type, distance, address, hours and contact where available, and route to it.
+- **Paste a map link**: paste a Google Maps, Apple Maps or OpenStreetMap link (or `geo:` URI) into search and the place becomes your destination. Full links are parsed on-device; short `maps.app.goo.gl` links are resolved through unshorten.me (or, failing that, the place name from the shared message is searched). On Android the app appears in the system Share menu.
 - **Share a route**: the link carries the route's own geometry, so the recipient sees the exact path (not one re-planned with their blocks) and can navigate it; one tap re-plans with their own blocks. GPX export for other devices.
 - **On-device place search**: the app decodes the vector tiles it already downloads and indexes every named shop, park, café, street, water body and neighbourhood within ~5 km of you (about 60 tiles, a few MB, cached). Queries match on-device — accent-, case- and apostrophe-blind, prefix and typo-tolerant ("wite castle", "greaters") — nearest first. Photon/Nominatim only add addresses and far-away places. Works offline once tiles are cached.
 - **Optional Mapbox search**: paste a Mapbox public token in Settings to use the Mapbox Search Box API instead (note: Mapbox requires a payment method on file even for its free tier).
@@ -72,6 +73,7 @@ js/
   share.js            route links (encoded polyline) and GPX export
   mvt.js              minimal Mapbox Vector Tile decoder
   places.js           on-device place index (tiles → fuzzy nearest-first search)
+  links.js            pasted map links → destination
   instructions.js     maneuvers from BRouter voice hints (geometric fallback)
   blocklist.js        blocklist model → no-go gates/circles
   navigator.js        navigation engine + ride simulator
