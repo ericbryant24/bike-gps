@@ -5,6 +5,7 @@ import { bbox, distance, formatDistance, formatDuration, formatSpeed, pointAtDis
 import { fetchRoute } from './router.js';
 import { announceableSteps, applyNames, stepIcon, stepsFromGeometry, stepsFromVoiceHints } from './instructions.js';
 import { rateSegments, rateSteps, routeComposition, gradeRuns } from './rating.js';
+import { ALTERNATIVE_INDICES, compareAlternatives, dedupeRoutes } from './alternatives.js';
 import { shareUrl, parseSharedRoute, toGpx } from './share.js';
 import { PlaceIndex, INDEX_RADIUS_M } from './places.js';
 import * as bl from './blocklist.js';
@@ -13,7 +14,7 @@ import { Voice } from './voice.js';
 import * as store from './storage.js';
 import * as geocode from './geocode.js';
 import * as overpass from './overpass.js';
-import { $, el, toast, hideToast, pill, hidePill, openModal, closeModal, openDrawer, closeDrawer, positionMenu, trackSheetHeight, renderSearchResults, renderProfileChips, renderSteps, renderSettings, renderBlocklist, renderEntryEditor, renderAbout, renderInstallHelp, renderComposition } from './ui.js';
+import { $, el, toast, hideToast, pill, hidePill, openModal, closeModal, openDrawer, closeDrawer, positionMenu, trackSheetHeight, renderSearchResults, renderProfileChips, renderSteps, renderSettings, renderBlocklist, renderEntryEditor, renderAbout, renderInstallHelp, renderComposition, renderAlternatives } from './ui.js';
 
 const state = {
   settings: store.loadSettings(),
@@ -22,6 +23,8 @@ const state = {
   dest: null,
   destLabel: '',
   route: null,
+  alternatives: [], // distinct route choices for the current plan, state.route among them
+  altsPending: false,
   steps: [], // all steps
   announceable: [],
   mode: 'idle', // idle | navigating
@@ -139,7 +142,7 @@ async function enrichNames(route, steps) {
     applyRatings();
     renderSteps($('steps-list'), state.announceable, units());
   } else if (state.nav?.state) renderHud(state.nav.state);
-  store.save(store.KEYS.lastRoute, { route, steps, dest: state.dest, destLabel: state.destLabel, start: state.start });
+  saveLastRoute();
 }
 
 function routeBBox(from, to) {
@@ -181,14 +184,40 @@ async function computeRoute(from, to, { signal } = {}) {
       route.soft = true;
       route.truncated = soft.truncated;
       route.blockedUse = bl.entriesUsedByRoute(route, active);
+      route.request = { nogos: soft.nogos, polylines: soft.polylines, nogoIds: soft.used };
       return route;
     }
     route.blockedUse = bl.entriesUsedByRoute(route, active);
     route.truncated = nogo.truncated;
+    route.request = { nogos: nogo.nogos, polylines: nogo.polylines, nogoIds: nogo.used };
     if (!route.blockedUse.length || !nogo.truncated) break;
     focus = route.points;
   }
   return route;
+}
+
+/**
+ * BRouter's alternatives for the same request (alternativeidx 1, 2), fetched
+ * in parallel and thinned to routes that actually differ from `primary` and
+ * from each other. Individual failures are ignored; returns [] on abort.
+ */
+async function loadAlternatives(from, to, primary, { signal } = {}) {
+  const req = primary.request || {};
+  const active = state.blocklist.filter((e) => e.enabled);
+  const results = await Promise.allSettled(
+    ALTERNATIVE_INDICES.map((alternative) =>
+      fetchRoute({ endpoint: state.settings.endpoint, from, to, profile: state.settings.profile, nogos: req.nogos, polylines: req.polylines, nogoIds: req.nogoIds, alternative }, { signal })
+    )
+  );
+  if (signal?.aborted) return [];
+  const routes = results.filter((r) => r.status === 'fulfilled').map((r) => r.value);
+  for (const r of routes) {
+    r.blockedUse = bl.entriesUsedByRoute(r, active);
+    r.soft = primary.soft;
+    r.truncated = primary.truncated;
+    r.request = primary.request;
+  }
+  return dedupeRoutes([primary, ...routes]).slice(1);
 }
 
 async function planRoute() {
@@ -213,18 +242,63 @@ async function planRoute() {
     const route = await computeRoute(from, state.dest, { signal: ctrl.signal });
     if (ctrl.signal.aborted) return;
     const steps = buildSteps(route);
+    state.alternatives = [route];
+    state.altsPending = true;
     setRoute(route, steps);
+    hidePill();
     map.fitPoints(route.points, { top: 80, bottom: $('sheet').offsetHeight || 220 });
-    store.save(store.KEYS.lastRoute, { route, steps, dest: state.dest, destLabel: state.destLabel, start: state.start });
+    saveLastRoute();
     enrichNames(route, steps).catch(() => {});
+    // Alternatives arrive after the main route is on screen; a new plan aborts them.
+    const alts = await loadAlternatives(from, state.dest, route, { signal: ctrl.signal });
+    if (ctrl.signal.aborted || state.route !== route) return;
+    state.altsPending = false;
+    state.alternatives = [route, ...alts];
+    renderAlternativesPanel();
+    if (alts.length) {
+      map.fitPoints(state.alternatives.flatMap((r) => r.points), { top: 80, bottom: $('sheet').offsetHeight || 220 });
+      saveLastRoute();
+    }
   } catch (e) {
     reportError(e, 'Routing failed');
   } finally {
     if (state.planAbort === ctrl) {
       state.planAbort = null;
+      state.altsPending = false;
       hidePill();
+      if (state.route) renderAlternativesPanel();
     }
   }
+}
+
+function saveLastRoute() {
+  const route = state.route;
+  if (!route) return;
+  store.save(store.KEYS.lastRoute, {
+    route,
+    steps: state.steps,
+    dest: state.dest,
+    destLabel: state.destLabel,
+    start: state.start,
+    alternatives: state.alternatives.filter((r) => r !== route),
+  });
+}
+
+/** Route choices under the summary, and the unchosen ones as grey lines on the map. */
+function renderAlternativesPanel() {
+  const alts = state.alternatives.filter((r) => r?.points?.length);
+  const rows = compareAlternatives(alts);
+  renderAlternatives($('route-alts'), rows, state.route, units(), selectAlternative, { pending: state.altsPending });
+  map.setAlternatives(state.mode === 'navigating' ? null : alts.filter((r) => r !== state.route).map((r) => ({ id: state.alternatives.indexOf(r), points: r.points })));
+}
+
+/** Switch the plan to one of the alternatives; the others stay on offer. */
+function selectAlternative(route) {
+  if (state.mode === 'navigating' || route === state.route || !state.alternatives.includes(route)) return;
+  const steps = buildSteps(route);
+  setRoute(route, steps);
+  saveLastRoute();
+  enrichNames(route, steps).catch(() => {});
 }
 
 /** Grade the roads of the current route; annotates steps and colours the map. */
@@ -243,6 +317,10 @@ function applyRatings() {
 }
 
 function setRoute(route, steps) {
+  if (!state.alternatives.includes(route)) {
+    state.alternatives = [route];
+    state.altsPending = false;
+  }
   state.route = route;
   state.steps = steps;
   state.announceable = announceableSteps(steps);
@@ -255,12 +333,15 @@ function setRoute(route, steps) {
 function clearRoute() {
   state.planAbort?.abort();
   state.route = null;
+  state.alternatives = [];
+  state.altsPending = false;
   state.steps = [];
   state.announceable = [];
   state.dest = null;
   state.destLabel = '';
   state.start = null;
   map.setRoute(null);
+  map.setAlternatives(null);
   map.setStart(null);
   map.setDest(null);
   map.setDrop(null);
@@ -297,6 +378,7 @@ function renderSheet() {
     warn.hidden = false;
   } else warn.hidden = true;
   applyRatings();
+  renderAlternativesPanel();
   $('shared-note').hidden = !r.shared;
   $('plan-time').textContent = r.shared ? `~${formatDuration(r.time)}` : formatDuration(r.time);
   renderSteps($('steps-list'), state.announceable, units());
@@ -345,6 +427,7 @@ async function startNavigation({ simulate = false } = {}) {
   $('nav-mute').setAttribute('aria-pressed', String(!voice.enabled));
   $('locate-btn').classList.add('active');
   map.setRouteGrades(null);
+  map.setAlternatives(null);
   map.setNavPadding({ top: $('nav-banner').offsetHeight + 24, bottom: $('nav-bottom').offsetHeight + 16 });
   map.setFollow(true, fix || state.route.from, { courseUp: courseUp(), heading: fix?.heading ?? null });
   updateCompass();
@@ -417,6 +500,7 @@ async function reroute() {
     if (!state.nav) return;
     const steps = buildSteps(route);
     state.route = route;
+    state.alternatives = [route];
     state.steps = steps;
     state.announceable = announceableSteps(steps);
     map.setRoute(route.points);
@@ -1194,6 +1278,10 @@ map.onBlockTap = (entry) => {
   openEntryEditor(entry);
 };
 map.onResultTap = (r) => pickPlace(r);
+map.onAltTap = (alt) => {
+  if (state.blockMode || state.mode === 'navigating') return;
+  selectAlternative(state.alternatives[alt.id]);
+};
 
 const humanType = (poi) =>
   (poi.subclass || poi.class || '')
@@ -1694,6 +1782,7 @@ function boot() {
       $('search').value = state.destLabel;
       $('search-clear').hidden = false;
     }
+    state.alternatives = [last.route, ...(Array.isArray(last.alternatives) ? last.alternatives : [])];
     setRoute(last.route, last.steps || []);
     map.fitPoints(last.route.points, { top: 80, bottom: 240 });
   } else if (!savedView) {

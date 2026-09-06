@@ -88,6 +88,7 @@ export class MapView {
     this.navPadding = { top: 0, bottom: 0 };
     this.userInteracted = () => {};
     this.onLongPress = () => {};
+    this.onAltTap = () => {};
     this.onTap = () => {};
     this.onBlockTap = () => {};
     this.onResultTap = () => {};
@@ -112,7 +113,7 @@ export class MapView {
     this.map.on('rotate', () => this.onBearing(this.map.getBearing()));
     this.map.on('mousemove', (e) => {
       if (this.blockMode) return;
-      const hit = this.blockFeatureAt(e.point);
+      const hit = this.blockFeatureAt(e.point) || this.altFeatureAt(e.point);
       this.map.getCanvas().style.cursor = hit ? 'pointer' : '';
     });
     this.installLongPress(el);
@@ -130,6 +131,7 @@ export class MapView {
     src('preview', this.data.preview || EMPTY);
     src('me-accuracy', this.data.accuracy || EMPTY);
     src('route-grades', this.data.grades || EMPTY);
+    src('route-alts', this.data.alts || EMPTY);
 
     // Draw under labels but above roads/buildings.
     const before = m.getStyle().layers.find((l) => l.type === 'symbol')?.id;
@@ -137,6 +139,9 @@ export class MapView {
       if (m.getLayer(id)) return;
       m.addLayer({ id, type: 'line', source, paint, layout: { 'line-cap': 'round', 'line-join': 'round', ...layout } }, before);
     };
+    // Alternative routes: grey, under the chosen route, tappable to switch.
+    line('route-alts-casing', 'route-alts', { 'line-color': '#ffffff', 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 5, 17, 11], 'line-opacity': 0.8 });
+    line('route-alts', 'route-alts', { 'line-color': '#64748b', 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 3, 17, 7], 'line-opacity': 0.75 });
     line('route-casing', 'route-casing', { 'line-color': '#ffffff', 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 6, 17, 13], 'line-opacity': 0.9 });
     line('route-done', 'route-done', { 'line-color': '#94a3b8', 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 3.5, 17, 8] });
     line('route-ahead', 'route-ahead', { 'line-color': '#1d4ed8', 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 3.5, 17, 8] });
@@ -332,6 +337,23 @@ export class MapView {
     if (!points?.length) this.setRouteGrades(null);
   }
 
+  /** Alternative routes as [{ id, points }] drawn under the chosen one; null clears. */
+  setAlternatives(alts) {
+    this.alts = alts || [];
+    this.data.alts = fc(this.alts.map((a) => lineFeature(a.points, { id: a.id })));
+    this.setSource('route-alts', this.data.alts);
+  }
+
+  altFeatureAt(point) {
+    if (!this.alts?.length || !this.map.getLayer('route-alts')) return null;
+    const box = [
+      [point.x - 10, point.y - 10],
+      [point.x + 10, point.y + 10],
+    ];
+    const f = this.map.queryRenderedFeatures(box, { layers: ['route-alts'] })[0];
+    return f ? this.alts.find((a) => a.id === f.properties.id) || null : null;
+  }
+
   /** Colour the planned route by grade runs [{grade, points}]; null clears. */
   setRouteGrades(runs) {
     this.data.grades = fc((runs || []).map((r) => lineFeature(r.points, { grade: r.grade })));
@@ -521,6 +543,11 @@ export class MapView {
       const poi = this.poiAt(e.point);
       if (poi) {
         this.onPoiTap(poi, { x: e.point.x, y: e.point.y });
+        return;
+      }
+      const alt = this.altFeatureAt(e.point);
+      if (alt) {
+        this.onAltTap(alt);
         return;
       }
     }

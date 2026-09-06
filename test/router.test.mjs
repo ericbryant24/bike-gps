@@ -15,7 +15,9 @@ test('buildRouteUrl produces a BRouter GET url with raw separators', () => {
   assert.equal(u.searchParams.get('polylines'), '1,2,3,4|5,6,7,8');
   assert.equal(u.searchParams.get('timode'), '2');
   assert.equal(u.searchParams.get('format'), 'geojson');
+  assert.equal(u.searchParams.get('alternativeidx'), '0');
   assert.ok(!url.includes('%2C') && !url.includes('%7C'));
+  assert.equal(new URL(buildRouteUrl({ from: { lat: 1, lon: 2 }, to: { lat: 3, lon: 4 }, alternative: 2 })).searchParams.get('alternativeidx'), '2');
 });
 
 test('parseRoute extracts geometry, stats and hints', () => {
@@ -39,9 +41,11 @@ test('fetchRoute uses the injected fetch and passes meta through', async () => {
     calledUrl = url;
     return { ok: true, status: 200, text: async () => fixture };
   };
-  const r = await fetchRoute({ from: { lat: 39.9612, lon: -83.0007 }, to: { lat: 39.98, lon: -83.018 }, nogoIds: ['a'] }, { fetchImpl });
+  const r = await fetchRoute({ from: { lat: 39.9612, lon: -83.0007 }, to: { lat: 39.98, lon: -83.018 }, nogoIds: ['a'], alternative: 1 }, { fetchImpl });
   assert.ok(calledUrl.startsWith('https://brouter.de/brouter?lonlats='));
+  assert.ok(calledUrl.includes('alternativeidx=1'));
   assert.deepEqual(r.nogoIds, ['a']);
+  assert.equal(r.alternative, 1);
   await assert.rejects(
     fetchRoute({ from: { lat: 0, lon: 0 }, to: { lat: 1, lon: 1 } }, { fetchImpl: async () => ({ ok: false, status: 500, text: async () => 'operation killed by thread priority watchdog' }) }),
     /busy/

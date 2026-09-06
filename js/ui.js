@@ -1,6 +1,6 @@
 // DOM helpers and view renderers. Knows nothing about routing or GPS.
 
-import { formatDistance } from './geo.js';
+import { formatDistance, formatDuration } from './geo.js';
 import { stepIcon } from './instructions.js';
 import { TILE_SOURCES } from './map.js';
 import { PROFILES } from './router.js';
@@ -176,6 +176,47 @@ export function renderComposition(container, comp, units) {
     ]),
     bar,
     legend
+  );
+  container.hidden = false;
+}
+
+/**
+ * Side-by-side route choices from alternatives.compareAlternatives:
+ * rows of [{ route, exposure, badges }], the selected route highlighted.
+ * `pending` shows a quiet "still looking" line while alternatives load.
+ */
+export function renderAlternatives(container, rows, selected, units, onPick, { pending = false } = {}) {
+  if (pending && rows.length < 2) {
+    container.replaceChildren(el('div', { class: 'alts-pending sub', text: 'Looking for alternative routes…' }));
+    container.hidden = false;
+    return;
+  }
+  if (rows.length < 2) {
+    container.hidden = true;
+    return;
+  }
+  container.replaceChildren(
+    el('div', { class: 'alts-head', text: 'Route options' }),
+    ...rows.map(({ route, exposure, badges }) => {
+      const active = route === selected;
+      const busy = exposure.busy >= 25 ? `${formatDistance(exposure.busy, units)} on busy roads` : 'No busy roads';
+      return el(
+        'button',
+        { class: `alt${active ? ' active' : ''}`, 'aria-pressed': String(active), onclick: () => onPick(route) },
+        [
+          el('span', { class: 'grade', style: `background:${GRADES[exposure.grade].color}`, text: exposure.grade, title: GRADES[exposure.grade].label }),
+          el('div', { class: 'alt-body' }, [
+            el('div', { class: 'alt-stats' }, [
+              el('span', { text: formatDistance(route.length, units) }),
+              el('span', { class: 'dot', text: '·' }),
+              el('span', { text: formatDuration(route.time) }),
+              ...badges.map((b) => el('span', { class: `badge alt-badge${b === 'Least traffic' ? ' quiet' : ''}`, text: b })),
+            ]),
+            el('div', { class: `sub alt-busy${exposure.busy >= 25 ? '' : ' none'}`, text: `${busy} · ${Math.round(exposure.friendlyShare * 100)}% paths & quiet streets` }),
+          ]),
+        ]
+      );
+    })
   );
   container.hidden = false;
 }
