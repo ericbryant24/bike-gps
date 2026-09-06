@@ -2,10 +2,12 @@
 // Requests are serialised through a small queue that enforces the spacing.
 
 import { distance } from './geo.js';
+import { expandAbbreviations, looksLikeAddress } from './places.js';
 
 const ENDPOINT = 'https://nominatim.openstreetmap.org';
 const NEARBY_KM = 80; // results beyond this are dropped when enough closer ones exist
 const ENOUGH = 3;
+const FAR_MAX = 5; // when nothing is nearby, show a few distant matches (a city, a far-off town)
 const MIN_GAP_MS = 1500;
 const results = new Map(); // session cache: query key → results
 const MAX_CACHED = 40;
@@ -37,15 +39,16 @@ export function parseLatLon(text) {
 
 function formatResult(r) {
   const a = r.address || {};
-  const name = r.name || r.display_name.split(',')[0];
+  const name = r.name || (a.house_number && a.road ? `${a.house_number} ${a.road}` : r.display_name.split(',')[0]);
   const parts = [a.road, a.neighbourhood || a.suburb, a.city || a.town || a.village || a.municipality, a.state]
     .filter(Boolean)
-    .filter((p) => p !== name);
+    .filter((p) => p !== name && !name.includes(p));
+  const cls = r.class || r.category || ''; // jsonv2 says "category", the older format "class"
   return {
     label: name,
     address: parts.join(', ') || r.display_name.split(',').slice(1, 4).join(',').trim(),
-    kind: (r.type || '').replace(/_/g, ' '),
-    osm: `${r.class || ''}=${r.type || ''}`,
+    kind: cls === 'highway' ? PHOTON_KIND[r.type] || 'road' : (r.type || '').replace(/_/g, ' '),
+    osm: `${cls}=${r.type || ''}`,
     lat: Number(r.lat),
     lon: Number(r.lon),
   };
@@ -124,7 +127,10 @@ function collapse(list, near) {
   const best = new Map();
   for (const r of list) {
     if (!Number.isFinite(r.lat) || !Number.isFinite(r.lon)) continue;
-    const k = `${r.label.replace(APOS, "'")}|${r.osm || r.kind}|${(r.address || '').split(',').slice(-2).join(',')}`.toLowerCase();
+    // A long road is one result per state, not one per neighbourhood or class.
+    const road = /^highway=/.test(r.osm || '') || r.kind === 'road';
+    const parts = (r.address || '').split(',');
+    const k = (road ? `${r.label.replace(APOS, "'")}|road|${parts.at(-1) || ''}` : `${r.label.replace(APOS, "'")}|${r.osm || r.kind}|${parts.slice(-2).join(',')}`).toLowerCase();
     const d = near ? Math.hypot((r.lat - near.lat) * 111, (r.lon - near.lon) * 111 * Math.cos((near.lat * Math.PI) / 180)) : 0;
     if (!best.has(k) || best.get(k).d > d) best.set(k, { d, r });
   }
@@ -189,47 +195,74 @@ export async function search(query, { near, rings = [4, 12, 30], limit = 40, wan
   if (direct) return [{ label: `${direct.lat.toFixed(5)}, ${direct.lon.toFixed(5)}`, address: 'Coordinates', kind: '', ...direct }];
   const key = `near|${q.toLowerCase()}|${near ? `${near.lat.toFixed(2)},${near.lon.toFixed(2)}` : '-'}`;
   return cached(key, async () => {
-    try {
-      const nearby = (list) => (near ? list.filter((r) => distance(near, r) < NEARBY_KM * 1000) : list);
-      let hits = await photon(q, near, { signal, fetchImpl });
-      onProgress?.(hits.map((r) => ({ ...r })));
+    const isNear = (r) => !near || distance(near, r) < NEARBY_KM * 1000;
+    const nearby = (list) => list.filter(isNear);
+
+    const wantsStops = /\b(bus|stop|station|transit)\b/i.test(q);
+    const noStops = (list) => (wantsStops ? list : list.filter((r) => r.osm !== 'highway=bus_stop'));
+    const viaPhoton = async () => {
+      let hits = noStops(await photon(q, near, { signal, fetchImpl }));
+      onProgress?.(nearby(hits).map((r) => ({ ...r })));
       // Apostrophe spellings vary between places with the same name (Whit's vs
       // Whit’s), so possessive-looking queries always search every spelling;
-      // other queries retry variants only when little was found nearby.
+      // other queries retry variants only when little was found nearby. Photon
+      // also doesn't know postal abbreviations, so "pkwy" is retried spelt out.
       APOS.lastIndex = 0;
-      const variants = spellingVariants(q);
+      const variants = [...spellingVariants(q), expandAbbreviations(q)].filter((v) => v && v !== q);
       if (variants.length && (looksPossessive(q) || nearby(hits).length < ENOUGH)) {
         const more = await Promise.all(variants.map((v) => photon(v, near, { signal, fetchImpl }).catch(() => [])));
-        hits = collapse([...hits, ...more.flat()], near);
-        onProgress?.(hits.map((r) => ({ ...r })));
+        hits = noStops(collapse([...hits, ...more.flat()], near));
+        onProgress?.(nearby(hits).map((r) => ({ ...r })));
       }
-      const close = nearby(hits);
-      if (close.length >= ENOUGH) return close;
-      if (hits.length) return hits;
-    } catch (e) {
-      if (signal?.aborted) throw e;
-      /* fall back to Nominatim */
-    }
-    return throttled(async () => {
-      let merged = [];
-      if (near) {
-        for (const km of rings) {
-          const p = baseParams(q, limit);
-          p.set('viewbox', viewbox(box(near, km)));
-          p.set('bounded', '1');
-          const ring = await nominatim(p, { signal, fetchImpl });
-          merged = dedupe([...merged, ...ring]);
-          onProgress?.(merged.map((r) => ({ ...r })));
-          if (ring.length < limit && merged.length >= want) break;
+      return hits;
+    };
+
+    const viaNominatim = () =>
+      throttled(async () => {
+        let merged = [];
+        if (near) {
+          for (const km of rings) {
+            const p = baseParams(q, limit);
+            p.set('viewbox', viewbox(box(near, km)));
+            p.set('bounded', '1');
+            const ring = await nominatim(p, { signal, fetchImpl });
+            merged = dedupe([...merged, ...ring]);
+            onProgress?.(noStops(collapse(merged, near)).map((r) => ({ ...r })));
+            if (ring.length < limit && merged.length >= want) break;
+          }
         }
+        if (merged.length < 3) {
+          const p = baseParams(q, 10);
+          if (near) p.set('viewbox', viewbox(box(near, 60)));
+          merged = dedupe([...merged, ...(await nominatim(p, { signal, fetchImpl }))]);
+        }
+        return noStops(collapse(merged, near));
+      });
+
+    // Photon is the better name matcher; Nominatim understands house numbers
+    // and abbreviations, so street addresses go there first. Anything found
+    // near the rider always beats matches hundreds of miles away: distant hits
+    // are only shown when nothing at all is nearby.
+    // A city or town whose name matches is always worth offering ("cleveland"
+    // shouldn't only mean Cleveland Avenue), even from far away.
+    const lq = q.toLowerCase();
+    const cities = (list, towns = false) => list.filter((r) => (r.osm === 'place=city' || (towns && r.osm === 'place=town')) && r.label.toLowerCase().startsWith(lq)).slice(0, 2);
+    const order = looksLikeAddress(q) ? [viaNominatim, viaPhoton] : [viaPhoton, viaNominatim];
+    let close = [];
+    let far = [];
+    for (const step of order) {
+      try {
+        const hits = await step();
+        close = collapse([...close, ...nearby(hits)], near);
+        far = collapse([...far, ...hits.filter((r) => !isNear(r))], near);
+        if (close.length >= ENOUGH) return [...close, ...cities(far)];
+      } catch (e) {
+        if (signal?.aborted) throw e;
       }
-      if (merged.length < 3) {
-        const p = baseParams(q, 10);
-        if (near) p.set('viewbox', viewbox(box(near, 60)));
-        merged = dedupe([...merged, ...(await nominatim(p, { signal, fetchImpl }))]);
-      }
-      return collapse(merged, near);
-    });
+    }
+    if (close.length) return [...close, ...cities(far)];
+    const c = cities(far, true);
+    return [...c, ...far.filter((r) => !c.includes(r))].slice(0, FAR_MAX);
   });
 }
 

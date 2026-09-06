@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { decodeTile, tileAt } from '../js/mvt.js';
-import { extractPlaces, normalize, matchTier, tilesAround, PlaceIndex, editDistance } from '../js/places.js';
+import { extractPlaces, normalize, matchTier, tilesAround, PlaceIndex, editDistance, expandAbbreviations, looksLikeAddress } from '../js/places.js';
 
 const tile = { z: 14, x: 4412, y: 6199 };
 const bytes = readFileSync(new URL('./fixtures/tile-14-4412-6199.pbf', import.meta.url));
@@ -79,4 +79,15 @@ test('editDistance handles substitutions, insertions and transpositions', () => 
   assert.equal(editDistance('graeters', 'greaters'), 1);
   assert.equal(editDistance('abc', 'abc'), 0);
   assert.equal(editDistance('abc', 'abcdef', 1), 2, 'capped');
+});
+
+test('street abbreviations are spelt out for matching; house numbers are ignored by the tile index', () => {
+  assert.equal(normalize('4457 Rosemary Pkwy'), '4457 rosemary parkway');
+  assert.equal(normalize('N High St'), 'n high st');
+  assert.equal(expandAbbreviations('4457 Rosemary pkwy'), '4457 Rosemary parkway');
+  assert.equal(expandAbbreviations('Olentangy River Rd.'), 'Olentangy River Road');
+  assert.equal(looksLikeAddress('4457 Rosemary pkwy'), true);
+  assert.equal(looksLikeAddress('315'), false);
+  assert.equal(looksLikeAddress('kroger'), false);
+  assert.equal(matchTier(normalize('Rosemary Parkway'), normalize('4457 Rosemary Pkwy').replace(/^\d+[a-z]?\s+(?=\S)/, ''), ['rosemary', 'parkway']), 1);
 });
