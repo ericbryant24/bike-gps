@@ -171,7 +171,7 @@ export function renderComposition(container, comp, units) {
   );
   container.replaceChildren(
     el('div', { class: 'row between comp-head' }, [
-      el('span', {}, [el('span', { class: 'grade', style: `background:${GRADES[comp.grade].color}`, text: comp.grade }), ` Bike-friendliness`]),
+      el('span', { text: `Bike-friendliness ${comp.grade} · ${GRADES[comp.grade].label}` }),
       el('span', { class: 'sub', text: `${Math.round(comp.friendlyShare * 100)}% on paths & quiet streets` }),
     ]),
     bar,

@@ -226,7 +226,8 @@ button:disabled { opacity: 0.5; cursor: default; }
 .sheet-handle { width: 40px; height: 4px; border-radius: 2px; background: var(--border); margin: 0 auto; }
 #plan-summary { touch-action: none; }
 #plan-actions { margin: 8px 0 4px; }
-.stats { font-size: 20px; font-weight: 700; display: flex; gap: 8px; align-items: baseline; }
+.stats { font-size: 20px; font-weight: 700; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+#plan-grade { align-self: center; min-width: 24px; height: 24px; font-size: 14px; margin-right: 2px; }
 .stats .dot { color: var(--muted); font-weight: 400; }
 #plan-ascend { font-size: 15px; font-weight: 500; color: var(--muted); }
 .steps { list-style: none; margin: 12px 0 0; padding: 0; border-top: 1px solid var(--border); }
