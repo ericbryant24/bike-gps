@@ -264,3 +264,19 @@ export function formatSpeed(mps, units = 'metric') {
   if (!Number.isFinite(mps) || mps < 0) return '—';
   return units === 'imperial' ? `${(mps * 2.23694).toFixed(0)} mph` : `${(mps * 3.6).toFixed(0)} km/h`;
 }
+
+/**
+ * Whether the follow camera should ease to a new fix. A stationary rider still
+ * gets a "new" GPS position every second that is a metre or two off the last
+ * one; easing to each of those keeps the GPU drawing the whole time you wait
+ * at a light. Skip the move unless the rider has actually shifted or turned.
+ */
+export function cameraShouldMove(prev, next, { minMove = 2.5, minTurn = 4 } = {}) {
+  if (!prev || !next) return true;
+  if (distance(prev, next) >= minMove) return true;
+  const a = prev.heading;
+  const b = next.heading;
+  if (Number.isFinite(a) !== Number.isFinite(b)) return true; // heading appeared or vanished
+  if (Number.isFinite(a) && Number.isFinite(b) && Math.abs(angleDiff(a, b)) >= minTurn) return true;
+  return false;
+}
