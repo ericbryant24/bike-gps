@@ -32,6 +32,7 @@ const SHELL = [
   './js/mvt.js',
   './js/places.js',
   './js/links.js',
+  './js/config.js',
   './js/instructions.js',
   './js/blocklist.js',
   './js/navigator.js',
@@ -50,7 +51,7 @@ const SHELL = [
 const TILE_HOSTS = /(^|\.)tile\.openstreetmap\.org$|tile-cyclosm\.openstreetmap\.fr$|basemaps\.cartocdn\.com$|^tiles\.openfreemap\.org$/;
 // Style JSON, TileJSON, sprites and glyphs: small, shared by every tile — keep fresh but serve instantly.
 const MAP_ASSET_PATH = /^\/(styles|sprites|fonts|planet$|natural_earth\/[^/]+$)/;
-const API_HOSTS = /brouter\.de$|nominatim\.openstreetmap\.org$|photon\.komoot\.io$|api\.mapbox\.com$|unshorten\.me$|overpass/;
+const API_HOSTS = /brouter\.de$|nominatim\.openstreetmap\.org$|photon\.komoot\.io$|api\.tomtom\.com$|unshorten\.me$|overpass/;
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

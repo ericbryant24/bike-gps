@@ -15,29 +15,36 @@ test('coordinate parsing', () => {
   assert.equal(parseLatLon('Glen Echo'), null);
 });
 
-test('Mapbox results normalise to our shape', async () => {
-  const { formatMapbox, mapboxSuggest, mapboxForward, MapboxAuthError } = await import('../js/geocode.js');
-  const sug = formatMapbox({ name: "Whit's Frozen Custard", mapbox_id: 'abc', feature_type: 'poi', poi_category: ['ice_cream_shop', 'food'], place_formatted: 'Columbus, Ohio', distance: 3500 });
-  assert.equal(sug.label, "Whit's Frozen Custard");
-  assert.equal(sug.kind, 'ice cream shop');
-  assert.equal(sug.distance, 3500);
-  assert.equal(sug.lat, undefined);
-  const full = formatMapbox({ name: 'X', feature_type: 'address' }, { longitude: -83, latitude: 40 });
-  assert.deepEqual([full.lat, full.lon, full.kind], [40, -83, 'address']);
-  const calls = [];
-  const fetchImpl = async (url) => {
-    calls.push(url);
-    if (url.includes('/suggest?')) return { ok: true, status: 200, json: async () => ({ suggestions: [{ name: 'A', mapbox_id: '1', distance: 10 }] }) };
-    if (url.includes('/forward?')) return { ok: true, status: 200, json: async () => ({ features: [{ geometry: { coordinates: [-83, 40] }, properties: { name: 'B' } }] }) };
-    return { ok: false, status: 401 };
-  };
-  const s = await mapboxSuggest('a', { token: 'pk.t', session: 's1', near: { lat: 40, lon: -83 }, fetchImpl });
-  assert.equal(s[0].mapboxId, '1');
-  assert.ok(calls[0].includes('proximity=-83.00000%2C40.00000') && calls[0].includes('session_token=s1') && calls[0].includes('access_token=pk.t'));
-  const f = await mapboxForward('b', { token: 'pk.t', bounds: { minLon: -84, minLat: 39, maxLon: -82, maxLat: 41 }, fetchImpl });
-  assert.equal(f[0].lat, 40);
-  assert.ok(calls[1].includes('bbox=-84%2C39%2C-82%2C41'));
-  await assert.rejects(mapboxSuggest('x', { token: 'bad', session: 's', fetchImpl: async () => ({ ok: false, status: 401 }) }), MapboxAuthError);
+test('TomTom results normalise to our shape; far hits drop when something is near; 403 raises TomTomUnavailable', async () => {
+  const { formatTomTom, tomtomSearch, TomTomUnavailable } = await import('../js/geocode.js');
+  const poi = formatTomTom({ type: 'POI', poi: { name: 'Worthington Tavern', categories: ['restaurant'], classifications: [{ code: 'RESTAURANT', names: [{ nameLocale: 'en-US', name: 'restaurant' }] }] }, address: { freeformAddress: '671 N High St, Worthington, OH 43085', municipality: 'Worthington', countrySubdivision: 'OH' }, position: { lat: 40.0876, lon: -83.0183 } }, 0);
+  assert.equal(poi.label, 'Worthington Tavern');
+  assert.equal(poi.kind, 'restaurant');
+  assert.equal(poi.address, '671 N High St, Worthington, OH 43085');
+  assert.equal(poi.tier, 1);
+  const addr = formatTomTom({ type: 'Point Address', address: { streetNumber: '4457', streetName: 'Rosemary Parkway', municipality: 'Columbus', countrySubdivision: 'OH', freeformAddress: '4457 Rosemary Parkway, Columbus, OH 43214' }, position: { lat: 40.0525, lon: -83.0226 } }, 4);
+  assert.equal(addr.label, '4457 Rosemary Parkway');
+  assert.equal(addr.kind, 'address');
+  assert.equal(addr.address, 'Columbus, OH');
+  assert.equal(addr.tier, 2);
+  const city = formatTomTom({ type: 'Geography', entityType: 'Municipality', address: { municipality: 'Cleveland', countrySubdivision: 'OH', freeformAddress: 'Cleveland, OH' }, position: { lat: 41.5, lon: -81.7 } }, 1);
+  assert.equal(city.label, 'Cleveland');
+  assert.equal(city.kind, 'city');
+
+  const near = { lat: 40.05, lon: -83.03 };
+  const body = { results: [
+    { type: 'POI', poi: { name: 'Kroger' }, address: { freeformAddress: 'Columbus' }, position: { lat: 40.06, lon: -83.03 }, dist: 1100 },
+    { type: 'POI', poi: { name: 'Kroger' }, address: { freeformAddress: 'Denver' }, position: { lat: 39.7, lon: -104.9 }, dist: 1900000 },
+    { type: 'Geography', entityType: 'Municipality', address: { municipality: 'Krogerville' }, position: { lat: 35, lon: -90 }, dist: 800000 },
+  ] };
+  let url = '';
+  const fetchImpl = async (u) => { url = u; return { ok: true, status: 200, json: async () => body }; };
+  const hits = await tomtomSearch('kroger', { key: 'k', near, typeahead: true, fetchImpl });
+  assert.ok(/typeahead=true/.test(url) && /lat=40\.05000/.test(url));
+  assert.deepEqual(hits.map((h) => h.address || h.label), ['Columbus', 'Krogerville']);
+  assert.equal(hits[0].distance, 1100);
+  await assert.rejects(() => tomtomSearch('x', { key: 'k', fetchImpl: async () => ({ ok: false, status: 403, json: async () => ({ detailedError: { message: 'Request contains an invalid Referer header' } }) }) }), TomTomUnavailable);
+  assert.deepEqual(await tomtomSearch('', { key: 'k', fetchImpl }), []);
 });
 
 test('geocodeAddress prefers Nominatim and only trusts Photon with a matching house number', async () => {
