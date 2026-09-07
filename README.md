@@ -22,8 +22,8 @@ No build step, no API keys, no backend: it's static HTML/CSS/JS that deploys str
 - **Tap a place on the map** (shop, park, café… from the tile data) to see its type, distance, address, hours and contact where available, and route to it.
 - **Paste a map link**: paste a Google Maps, Apple Maps or OpenStreetMap link (or `geo:` URI) into search and the place becomes your destination. Full links are parsed on-device; short `maps.app.goo.gl` links are resolved through unshorten.me (or, failing that, the place name from the shared message is searched). Google's share links usually carry only a name and street address, no coordinates: the address is pinned with Nominatim and the pin snaps to the named place when the on-device index knows it. On Android the app appears in the system Share menu.
 - **Share a route**: the link carries the route's own geometry, so the recipient sees the exact path (not one re-planned with their blocks) and can navigate it; one tap re-plans with their own blocks. GPX export for other devices.
-- **On-device place search**: the app decodes the vector tiles it already downloads and indexes every named shop, park, café, street, water body and neighbourhood within ~5 km of you (about 60 tiles, a few MB, cached). Queries match on-device — accent-, case- and apostrophe-blind, prefix and typo-tolerant ("wite castle", "greaters") — nearest first. Photon/Nominatim only add addresses and far-away places: street addresses ("4457 Rosemary Pkwy") go to Nominatim first, postal abbreviations are spelt out for matching, and anything found nearby always outranks matches far away, which are only shown when nothing at all is close. Works offline once tiles are cached.
-- **Optional Mapbox search**: paste a Mapbox public token in Settings to use the Mapbox Search Box API instead (note: Mapbox requires a payment method on file even for its free tier).
+- **On-device place search (fallback and offline)**: the app decodes the vector tiles it already downloads and indexes every named shop, park, café, street, water body and neighbourhood within ~5 km of you (about 60 tiles, a few MB, cached). Queries match on-device — accent-, case- and apostrophe-blind, prefix and typo-tolerant ("wite castle", "greaters") — nearest first. Photon/Nominatim only add addresses and far-away places: street addresses ("4457 Rosemary Pkwy") go to Nominatim first, postal abbreviations are spelt out for matching, and anything found nearby always outranks matches far away, which are only shown when nothing at all is close. Works offline once tiles are cached.
+- **TomTom search**: suggestions while you type come from the TomTom Search API (commercial business listings and house-number address autocomplete, one request per query), merged with instant hits from the on-device tile index. A built-in free-tier key locked to this site is used; paste your own in Settings to use your own quota. If TomTom is unreachable or the quota runs out, search falls back to the OpenStreetMap stack below.
 - **Search** anchored to *your location* regardless of where the map is: suggestions appear as you type without moving the map; Enter/Go sorts results by distance from you, drops numbered pins and fits them into view; "Search this area" (after you pan) is the only search that uses the visible map instead.
 - **Automatic rerouting** when you leave the route, with GPS-glitch tolerance.
 - **Battery**: idle, the app runs no GPS watch, timers or polling. While navigating the follow camera only moves when you actually move or turn (GPS jitter at a red light no longer keeps the GPU drawing), and a *Battery saver* setting keeps the map flat and north-up, which is much cheaper to render than the tilted 3D view. The avoid-this-road control in the ride HUD is a compact ⛔ button.
@@ -73,7 +73,8 @@ js/
   rating.js           bike-friendliness grading of route segments
   alternatives.js     alternative-route dedupe and traffic-exposure comparison
   share.js            route links (encoded polyline) and GPX export
-  mvt.js              minimal Mapbox Vector Tile decoder
+  mvt.js              minimal Mapbox Vector Tile (MVT) decoder
+  config.js           built-in TomTom search key
   places.js           on-device place index (tiles → fuzzy nearest-first search)
   links.js            pasted map links → destination
   instructions.js     maneuvers from BRouter voice hints (geometric fallback)
@@ -88,9 +89,9 @@ scripts/              dev server, icon generator
 test/                 node --test suites (+ a real BRouter response fixture)
 ```
 
-## Optional: Mapbox search
+## Search key
 
-Search uses free OpenStreetMap geocoders by default. For Google-quality place search, create a free Mapbox account, make a **public** token (`pk.…`) with the default scopes, restrict it to your site's URL (e.g. `https://<user>.github.io/bike-gps/*`), and paste it in **Settings → Mapbox search token**. The token is stored only on that device. Mapbox's free tier (tens of thousands of search sessions per month) comfortably covers personal use; the app uses one *suggest* session per query while typing plus one *retrieve* or *forward* request when you commit.
+`js/config.js` holds a TomTom Search API key. It is intentionally public: a browser app cannot hide a key, so it is a free-tier key (no payment method on the account) with TomTom's domain whitelist set to this site. If it is ever abused, make a new key in the TomTom portal and replace it. **Settings → TomTom key** overrides it per device.
 
 ## Services used
 

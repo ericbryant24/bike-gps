@@ -26,7 +26,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   tiles: 'liberty',
   navView: '3d', // '3d' course-up perspective | 'north' north-up flat
   crossing: 'signals', // default crossing rule for new blocked roads
-  mapboxToken: '', // optional: Mapbox Search Box API public token for place search
+  tomtomKey: '', // optional: your own TomTom Search key; empty = the built-in one (config.js)
   endpoint: DEFAULT_ENDPOINT,
   offRouteMeters: 40,
   autoReroute: true,

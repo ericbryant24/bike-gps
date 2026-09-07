@@ -259,9 +259,9 @@ export function renderSettings(settings, onChange, { onClearTiles, onCheckUpdate
       el('input', { type: 'url', value: settings.endpoint, onchange: (e) => onChange('endpoint', e.target.value.trim()) })
     ),
     setting(
-      'Mapbox search token',
-      'Optional. Google-quality place search. Free tier covers personal use; create a public token (pk.…) at account.mapbox.com and restrict it to this site\u2019s URL. Leave empty to use the free OpenStreetMap geocoders.',
-      el('input', { type: 'text', placeholder: 'pk.…', value: settings.mapboxToken || '', autocomplete: 'off', spellcheck: 'false', onchange: (e) => onChange('mapboxToken', e.target.value.trim()) })
+      'TomTom key',
+      'Optional. Search uses a built-in TomTom key (free tier, locked to this site). Paste your own key from developer.tomtom.com to use your own quota; it is stored only on this device.',
+      el('input', { type: 'text', placeholder: 'built-in key', value: settings.tomtomKey || '', autocomplete: 'off', spellcheck: 'false', onchange: (e) => onChange('tomtomKey', e.target.value.trim()) })
     ),
     setting('Cached map tiles', 'Free up storage', el('button', { class: 'secondary', text: 'Clear', onclick: onClearTiles })),
     setting('App version', version ? `Bike GPS ${version}` : 'Bike GPS', el('button', { class: 'secondary', text: 'Check for updates', onclick: onCheckUpdate })),
@@ -363,7 +363,7 @@ export function renderAbout(version) {
     el('h4', { text: 'Data & services' }),
     el('p', {
       html:
-        'Routing by <a href="https://brouter.de" target="_blank" rel="noopener">BRouter</a>. Search by <a href="https://nominatim.org" target="_blank" rel="noopener">Nominatim</a>. Road data via the <a href="https://overpass-api.de" target="_blank" rel="noopener">Overpass API</a>. Map data &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors. These are free community services — please be considerate.',
+        'Routing by <a href="https://brouter.de" target="_blank" rel="noopener">BRouter</a>. Search &copy; <a href="https://www.tomtom.com" target="_blank" rel="noopener">TomTom</a>, with <a href="https://nominatim.org" target="_blank" rel="noopener">Nominatim</a> and <a href="https://photon.komoot.io" target="_blank" rel="noopener">Photon</a> as fallbacks. Road data via the <a href="https://overpass-api.de" target="_blank" rel="noopener">Overpass API</a>. Map data &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors. These are free community services — please be considerate.',
     }),
     el('p', { class: 'hint', text: 'Your location and blocked roads never leave your device except as part of routing requests.' }),
   ]);

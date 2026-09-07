@@ -328,80 +328,83 @@ export async function reverse(point, { signal, fetchImpl = globalThis.fetch } = 
   }
 }
 
-// ---------------------------------------------------------------- Mapbox
-// Optional: Mapbox Search Box API (needs a public access token, pk.…). Built
-// for place search: fuzzy matching, relevance + proximity ranking, fresh POI
-// data. suggest() is for search-as-you-type (names only, billed per session),
-// retrieve() resolves a suggestion to coordinates, forward() returns full
-// features with coordinates for a committed search or a bounding box.
-const MAPBOX = 'https://api.mapbox.com/search/searchbox/v1';
-const MAPBOX_TYPES = 'poi,address,street,place,neighborhood,locality,district';
+// ---------------------------------------------------------------- TomTom
+// TomTom Search API: commercial POI + address data, fuzzy matching, house-number
+// autocomplete ("445" → nearby addresses), distance-biased. One request per
+// query; typeahead=true tells it the text is still being typed.
+const TOMTOM = 'https://api.tomtom.com/search/2/search';
+const FAR_KM = 300; // hits beyond this are dropped when something is near, unless it's a city
 
-export class MapboxAuthError extends Error {}
+/** Key rejected, quota exhausted or service down: the caller falls back to the OSM stack. */
+export class TomTomUnavailable extends Error {}
 
-function mapboxKind(p) {
-  const cat = (p.poi_category || [])[0];
-  if (cat) return cat.replace(/_/g, ' ');
-  return (p.feature_type || '').replace(/_/g, ' ');
-}
+const TT_KIND = { POI: '', 'Point Address': 'address', 'Address Range': 'address', Street: 'road', 'Cross Street': 'intersection', Geography: 'place' };
+const humanise = (s) => String(s || '').toLowerCase().replace(/_/g, ' ');
 
-/** Normalise a Search Box feature/suggestion into our result shape. */
-export function formatMapbox(p, coords) {
-  const lat = coords?.latitude ?? coords?.lat ?? p.coordinates?.latitude;
-  const lon = coords?.longitude ?? coords?.lon ?? p.coordinates?.longitude;
+/** Normalise one TomTom result into the app's result shape. */
+export function formatTomTom(r, order = 0) {
+  const a = r.address || {};
+  const type = r.type || 'POI';
+  const cls = r.poi?.classifications?.[0];
+  const clsName = cls?.names?.find((n) => /^en/i.test(n.nameLocale || 'en'))?.name || cls?.names?.[0]?.name || cls?.code;
+  let label;
+  let kind = TT_KIND[type] ?? humanise(type);
+  if (type === 'POI') {
+    label = r.poi?.name || a.freeformAddress;
+    kind = humanise(clsName || r.poi?.categories?.[0] || '');
+  } else if (type === 'Point Address' || type === 'Address Range') label = [a.streetNumber, a.streetName].filter(Boolean).join(' ') || a.freeformAddress;
+  else if (type === 'Street' || type === 'Cross Street') label = a.streetName || a.freeformAddress;
+  else {
+    label = a.municipality || a.localName || a.municipalitySubdivision || a.countrySubdivision || a.freeformAddress;
+    kind = humanise(r.entityType === 'Municipality' ? 'city' : r.entityType || 'place');
+  }
+  const town = [a.municipalitySubdivision && a.municipalitySubdivision !== label ? a.municipalitySubdivision : null, a.municipality !== label ? a.municipality : null, a.countrySubdivision].filter(Boolean);
+  const address = type === 'POI' ? a.freeformAddress || town.join(', ') : [...new Set(town)].join(', ');
   return {
-    label: p.name_preferred || p.name || p.full_address || 'Place',
-    address: p.place_formatted || p.full_address || p.address || '',
-    kind: mapboxKind(p),
-    lat: Number.isFinite(lat) ? lat : undefined,
-    lon: Number.isFinite(lon) ? lon : undefined,
-    distance: Number.isFinite(p.distance) ? p.distance : undefined, // metres from proximity, when given
-    mapboxId: p.mapbox_id,
-    osm: `mapbox=${p.feature_type || ''}`,
+    label: label || 'Place',
+    address: address === label ? '' : address || '',
+    kind: kind === (label || '').toLowerCase() ? '' : kind,
+    lat: r.position?.lat,
+    lon: r.position?.lon,
+    osm: `tomtom=${type}`,
+    order,
+    tier: order < 3 ? 1 : 2,
   };
 }
 
-async function mapboxGet(path, params, { token, signal, fetchImpl }) {
-  params.set('access_token', token);
-  params.set('language', (globalThis.navigator?.language || 'en').slice(0, 2));
-  const res = await fetchImpl(`${MAPBOX}/${path}?${params}`, { signal, headers: { Accept: 'application/json' } });
-  if (res.status === 401 || res.status === 403) throw new MapboxAuthError('Mapbox rejected the access token. Check it in Settings.');
-  if (!res.ok) throw new Error(`Mapbox search failed (${res.status})`);
-  return res.json();
-}
-
-/** Search-as-you-type: names + addresses + distance, no coordinates yet. */
-export async function mapboxSuggest(q, { token, session, near, limit = 10, signal, fetchImpl = globalThis.fetch }) {
-  const params = new URLSearchParams({ q: q.trim(), limit: String(Math.min(10, limit)), session_token: session, types: MAPBOX_TYPES });
-  if (near) params.set('proximity', `${near.lon.toFixed(5)},${near.lat.toFixed(5)}`);
-  const json = await mapboxGet('suggest', params, { token, signal, fetchImpl });
-  return (json.suggestions || []).map((sug) => formatMapbox(sug));
-}
-
-/** Coordinates (and full details) for one suggestion. */
-export async function mapboxRetrieve(mapboxId, { token, session, signal, fetchImpl = globalThis.fetch }) {
-  const params = new URLSearchParams({ session_token: session });
-  const json = await mapboxGet(`retrieve/${encodeURIComponent(mapboxId)}`, params, { token, signal, fetchImpl });
-  const f = (json.features || [])[0];
-  if (!f) return null;
-  return formatMapbox(f.properties || {}, { longitude: f.geometry?.coordinates?.[0], latitude: f.geometry?.coordinates?.[1] });
-}
-
-/** Committed search: full features with coordinates, near a point or inside a box. */
-export async function mapboxForward(q, { token, near, bounds, limit = 10, signal, fetchImpl = globalThis.fetch }) {
-  const params = new URLSearchParams({ q: q.trim(), limit: String(Math.min(10, limit)), types: MAPBOX_TYPES });
-  if (near) params.set('proximity', `${near.lon.toFixed(5)},${near.lat.toFixed(5)}`);
-  if (bounds) params.set('bbox', `${bounds.minLon},${bounds.minLat},${bounds.maxLon},${bounds.maxLat}`);
-  const json = await mapboxGet('forward', params, { token, signal, fetchImpl });
-  return (json.features || []).map((f) => formatMapbox(f.properties || {}, { longitude: f.geometry?.coordinates?.[0], latitude: f.geometry?.coordinates?.[1] }));
-}
-
-/** Cheap validity check for a token (one tiny forward request). */
-export async function mapboxCheckToken(token, { fetchImpl = globalThis.fetch } = {}) {
-  try {
-    await mapboxForward('park', { token, near: { lat: 40, lon: -83 }, limit: 1, fetchImpl });
-    return { ok: true };
-  } catch (e) {
-    return { ok: false, message: e.message };
+/**
+ * Search TomTom near a point or inside a bounding box. `typeahead` for text
+ * still being typed. Throws TomTomUnavailable on 403/429/5xx so the caller
+ * can fall back; returns [] for a plain "nothing found".
+ */
+export async function tomtomSearch(q, { key, near, bounds, typeahead = false, limit = 10, signal, fetchImpl = globalThis.fetch } = {}) {
+  const text = q.trim();
+  if (!text || !key) return [];
+  const p = new URLSearchParams({ key, limit: String(limit), typeahead: String(!!typeahead), idxSet: 'POI,PAD,Str,Xstr,Geo', language: globalThis.navigator?.language || 'en-US' });
+  if (bounds) {
+    p.set('topLeft', `${bounds.maxLat},${bounds.minLon}`);
+    p.set('btmRight', `${bounds.minLat},${bounds.maxLon}`);
   }
+  if (near) {
+    p.set('lat', near.lat.toFixed(5));
+    p.set('lon', near.lon.toFixed(5));
+  }
+  const res = await fetchImpl(`${TOMTOM}/${encodeURIComponent(text)}.json?${p}`, { signal, headers: { Accept: 'application/json' } });
+  if (res.status === 403 || res.status === 429 || res.status >= 500) {
+    let why = `TomTom search unavailable (${res.status})`;
+    try {
+      const j = await res.json();
+      if (j?.detailedError?.message) why = `TomTom: ${j.detailedError.message}`;
+    } catch {
+      /* no body */
+    }
+    throw new TomTomUnavailable(why);
+  }
+  if (!res.ok) throw new Error(`Search failed (${res.status})`);
+  const json = await res.json();
+  let hits = (json.results || []).map((r, i) => ({ ...formatTomTom(r, i), distance: Number.isFinite(r.dist) ? r.dist : undefined })).filter((r) => Number.isFinite(r.lat) && Number.isFinite(r.lon));
+  if (near && !bounds && hits.some((r) => distance(near, r) < NEARBY_KM * 1000)) {
+    hits = hits.filter((r) => distance(near, r) < FAR_KM * 1000 || r.osm === 'tomtom=Geography');
+  }
+  return hits;
 }

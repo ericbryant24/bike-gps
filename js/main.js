@@ -9,6 +9,7 @@ import { ALTERNATIVE_INDICES, compareAlternatives, dedupeRoutes } from './altern
 import { shareUrl, parseSharedRoute, toGpx } from './share.js';
 import { PlaceIndex, INDEX_RADIUS_M, looksLikeAddress, racksNear } from './places.js';
 import { parseMapLink, unshorten } from './links.js';
+import { TOMTOM_KEY } from './config.js';
 import * as bl from './blocklist.js';
 import { Navigator, simulateRide } from './navigator.js';
 import { Voice } from './voice.js';
@@ -1050,10 +1051,11 @@ function showResults(results, anchor, { commit = false, fit = false } = {}) {
   // Typo-tolerant (tier 3) matches are a fallback: hidden when the name matched
   // outright (tier 1) or when solid matches aren't scarce.
   if (results.some((r) => tier(r) === 1) || results.filter((r) => tier(r) <= 2).length >= 3) results = results.filter((r) => tier(r) <= 2);
-  results.sort((a, b) => tier(a) - tier(b) || road(a) - road(b) || (a.distance ?? Infinity) - (b.distance ?? Infinity));
+  results.sort((a, b) => tier(a) - tier(b) || road(a) - road(b) || (a.order ?? 1e9) - (b.order ?? 1e9) || (a.distance ?? Infinity) - (b.distance ?? Infinity));
   results = results.slice(0, MAX_SHOWN_RESULTS);
   state.search.results = results;
   state.search.anchor = anchor;
+  $('search-credit').hidden = !results.some((r) => (r.osm || '').startsWith('tomtom='));
   state.search.committed = commit;
   renderSearchResults($('search-results'), results, pickPlace, { units: units(), numbered: commit });
   if (!commit) return;
@@ -1108,30 +1110,34 @@ async function ensurePlaceIndex(anchor, { quiet = false, signal, radius = INDEX_
   }
 }
 
-const mapboxToken = () => (state.settings.mapboxToken || '').trim();
-function mapboxSession() {
-  if (!state.search.session) state.search.session = crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`;
-  return state.search.session;
-}
+const tomtomKey = () => (state.settings.tomtomKey || '').trim() || TOMTOM_KEY;
+/** TomTom is the primary search; after a key/quota failure the OSM stack takes over for a while. */
+const tomtomActive = () => !!tomtomKey() && Date.now() > (state.tomtomDownUntil || 0);
 
-/** Mapbox path: suggest while typing (names + distance), forward on commit (coordinates). */
-async function runMapboxSearch(q, anchor, { fromInput, ctrl }) {
-  const token = mapboxToken();
+/**
+ * TomTom path: one request per query (typeahead while typing), commercial POI
+ * and address data ranked by TomTom. Nearby hits from the on-device tile index
+ * appear instantly and are merged in; the OSM geocoders stay out of it.
+ */
+async function runTomTomSearch(q, anchor, { fromInput, ctrl }) {
+  let local = [];
+  if (placeIndex?.covers(anchor)) local = placeIndex.search(q, anchor, { limit: 6 });
+  else ensurePlaceIndex(anchor, { quiet: true }).catch(() => {});
+  if (local.length && fromInput) showResults(local, anchor, { commit: false });
   try {
-    if (fromInput) {
-      const hits = await geocode.mapboxSuggest(q, { token, session: mapboxSession(), near: anchor, signal: ctrl.signal });
-      if (ctrl.signal.aborted) return;
-      showResults(hits, anchor, { commit: false });
-      return;
-    }
-    const hits = await geocode.mapboxForward(q, { token, near: anchor, signal: ctrl.signal });
+    const hits = await geocode.tomtomSearch(q, { key: tomtomKey(), near: anchor, typeahead: fromInput, limit: fromInput ? 8 : 12, signal: ctrl.signal });
     if (ctrl.signal.aborted) return;
-    showResults(hits, anchor, { commit: true, fit: true });
-    if (!hits.length) toast('No places found near you.');
+    const list = mergePlaces(hits, local);
+    showResults(list, anchor, { commit: !fromInput, fit: !fromInput });
+    if (!fromInput && !list.length) toast('No places found.');
   } catch (e) {
     if (ctrl.signal.aborted) return;
-    if (e instanceof geocode.MapboxAuthError) {
-      toast(`${e.message} Using the free geocoder instead.`, { duration: 6000 });
+    if (e instanceof geocode.TomTomUnavailable) {
+      state.tomtomDownUntil = Date.now() + 10 * 60 * 1000;
+      if (!state.tomtomWarned) {
+        state.tomtomWarned = true;
+        toast(`${e.message}. Using OpenStreetMap search for now.`, { duration: 6000 });
+      }
       return runOsmSearch(q, anchor, { fromInput, ctrl });
     }
     throw e;
@@ -1283,8 +1289,8 @@ async function runSearch(q, { fromInput = false } = {}) {
     const anchor = await searchAnchor();
     if (ctrl.signal.aborted) return;
     state.search.query = q;
-    if (mapboxToken()) {
-      await runMapboxSearch(q, anchor, { fromInput, ctrl });
+    if (tomtomActive()) {
+      await runTomTomSearch(q, anchor, { fromInput, ctrl });
       return;
     }
     await runOsmSearch(q, anchor, { fromInput, ctrl });
@@ -1302,8 +1308,8 @@ async function searchHere() {
   pill('Searching this area…', { spinner: true });
   try {
     let results;
-    if (mapboxToken()) results = await geocode.mapboxForward(q, { token: mapboxToken(), bounds: map.bounds, near: map.center });
-    else {
+    if (tomtomActive()) results = await geocode.tomtomSearch(q, { key: tomtomKey(), bounds: map.bounds, near: map.center, limit: 15 }).catch(() => null);
+    if (!results) {
       const b = map.bounds;
       const radius = Math.min(8000, Math.max(1500, distance({ lat: b.minLat, lon: b.minLon }, { lat: b.maxLat, lon: b.maxLon }) / 2));
       const idx = await ensurePlaceIndex(map.center, { radius });
@@ -1353,20 +1359,6 @@ function showRecents() {
 }
 
 async function pickPlace(place) {
-  if (!Number.isFinite(place.lat) && place.mapboxId && mapboxToken()) {
-    pill('Locating…', { spinner: true });
-    try {
-      const full = await geocode.mapboxRetrieve(place.mapboxId, { token: mapboxToken(), session: mapboxSession() });
-      if (!full) throw new Error('Could not locate that place.');
-      place = { ...place, ...full, label: place.label };
-      state.search.session = null; // a session ends with a retrieve
-    } catch (e) {
-      reportError(e, 'Could not locate that place');
-      return;
-    } finally {
-      hidePill();
-    }
-  }
   $('search-results').hidden = true;
   $('search').value = place.label;
   $('search-clear').hidden = false;
@@ -1532,7 +1524,7 @@ $('search').addEventListener('input', (e) => {
     if (!q.trim()) showRecents();
     return;
   }
-  searchTimer = setTimeout(() => runSearch(q, { fromInput: true }), 700);
+  searchTimer = setTimeout(() => runSearch(q, { fromInput: true }), tomtomActive() ? 350 : 700);
 });
 $('search').addEventListener('focus', () => {
   if (!$('search').value.trim()) showRecents();
@@ -1774,13 +1766,11 @@ function openSettings() {
         updateCompass();
       }
       if (key === 'endpoint' && state.route) planRoute();
-      if (key === 'mapboxToken' && value) {
-        pill('Checking Mapbox token…', { spinner: true });
-        geocode.mapboxCheckToken(value).then((r) => {
-          hidePill();
-          toast(r.ok ? 'Mapbox search is on.' : `Mapbox token problem: ${r.message}`, { duration: 6000 });
-        });
-      } else if (key === 'mapboxToken') toast('Mapbox search off — using the free geocoders.');
+      if (key === 'tomtomKey') {
+        state.tomtomDownUntil = 0;
+        state.tomtomWarned = false;
+        toast(value ? 'Using your TomTom key for search.' : 'Using the built-in TomTom key for search.');
+      }
     },
     {
       version: self.APP_VERSION,
