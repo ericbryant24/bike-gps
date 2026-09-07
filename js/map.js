@@ -8,6 +8,7 @@
 /* global maplibregl */
 
 import { cameraShouldMove, cumulativeDistances, destination, distance, snapToPath } from './geo.js';
+import { PARK_SUBCLASS, pointInRing } from './details.js';
 
 const OFM = 'https://tiles.openfreemap.org/styles';
 const OSM_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
@@ -505,7 +506,8 @@ export class MapView {
   /** Named point of interest under a screen point (from the tiles), or null. */
   poiAt(point, { radius = 14 } = {}) {
     const m = this.map;
-    const layers = (m.getStyle()?.layers || []).filter((l) => l['source-layer'] === 'poi' && m.getLayer(l.id)).map((l) => l.id);
+    const wanted = new Set(['poi', 'park', 'landcover']);
+    const layers = (m.getStyle()?.layers || []).filter((l) => wanted.has(l['source-layer']) && m.getLayer(l.id)).map((l) => l.id);
     if (!layers.length) return null;
     const box = [
       [point.x - radius, point.y - radius],
@@ -519,10 +521,33 @@ export class MapView {
     }
     const isRack = (x) => x.properties?.class === 'bicycle_parking';
     const f = feats.find((x) => x.geometry?.type === 'Point' && (x.properties?.name || isRack(x)));
-    if (!f) return null;
-    const [lon, lat] = f.geometry.coordinates;
-    const unnamed = !f.properties.name;
-    return { name: f.properties.name || 'Bike rack', unnamed, class: f.properties.class || null, subclass: f.properties.subclass || null, lat, lon };
+    if (f) {
+      const [lon, lat] = f.geometry.coordinates;
+      const unnamed = !f.properties.name;
+      return { name: f.properties.name || 'Bike rack', unnamed, class: f.properties.class || null, subclass: f.properties.subclass || null, lat, lon };
+    }
+    // Inside a park outline (landcover polygon, unnamed): name it from the park
+    // label or park POI that sits inside the same outline.
+    const lc = feats.find((x) => x.sourceLayer === 'landcover' && PARK_SUBCLASS.test(x.properties?.subclass || '') && /Polygon/.test(x.geometry?.type || ''));
+    if (lc) {
+      const rings = lc.geometry.type === 'Polygon' ? [lc.geometry.coordinates[0]] : lc.geometry.coordinates.map((pg) => pg[0]);
+      const inside = (c) => rings.some((r) => pointInRing({ lon: c[0], lat: c[1] }, r));
+      let labels = [];
+      try {
+        labels = [
+          ...m.querySourceFeatures('openmaptiles', { sourceLayer: 'park' }),
+          ...m.querySourceFeatures('openmaptiles', { sourceLayer: 'poi', filter: ['==', ['get', 'class'], 'park'] }),
+        ];
+      } catch {
+        labels = [];
+      }
+      const label = labels.find((x) => x.properties?.name && x.geometry?.type === 'Point' && inside(x.geometry.coordinates));
+      if (label) {
+        const ll = m.unproject([point.x, point.y]);
+        return { name: label.properties.name, unnamed: false, class: 'park', subclass: lc.properties.subclass || 'park', lat: ll.lat, lon: ll.lng, area: true };
+      }
+    }
+    return null;
   }
 
   // ---------------------------------------------------- roads from the tiles

@@ -10,6 +10,7 @@ import { shareUrl, parseSharedRoute, toGpx } from './share.js';
 import { PlaceIndex, INDEX_RADIUS_M, looksLikeAddress, racksNear } from './places.js';
 import { parseMapLink, unshorten } from './links.js';
 import { TOMTOM_KEY } from './config.js';
+import { parkFromTiles, formatArea, describeAmenities, formatHours, wikipediaFor, commonsPhotos } from './details.js';
 import * as bl from './blocklist.js';
 import { Navigator, simulateRide } from './navigator.js';
 import { Voice } from './voice.js';
@@ -1064,7 +1065,7 @@ function showResults(results, anchor, { commit = false, fit = false } = {}) {
   state.search.anchor = anchor;
   $('search-credit').hidden = !results.some((r) => (r.osm || '').startsWith('tomtom='));
   state.search.committed = commit;
-  renderSearchResults($('search-results'), results, pickPlace, { units: units(), numbered: commit });
+  renderSearchResults($('search-results'), results, pickPlace, { units: units(), numbered: commit , onInfo: infoForResult });
   if (!commit) return;
   map.setSearchResults(results.filter((r) => Number.isFinite(r.lat)));
   const located = results.filter((r) => Number.isFinite(r.lat));
@@ -1428,8 +1429,13 @@ const humanType = (poi) =>
     .replace(/_/g, ' ')
     .replace(/^\w/, (c) => c.toUpperCase());
 
-/** A place tapped on the map: show what we know and offer to route there. */
-map.onPoiTap = async (poi, xy) => {
+/**
+ * A place tapped on the map (or ⓘ on a search row): show what we know and
+ * offer to route there. The card fills in as sources answer — park size and
+ * what's inside it from the tiles, hours/phone/website from TomTom, a
+ * Wikipedia paragraph and photo when one exists, nearby Commons photos.
+ */
+async function openPlaceCard(poi, xy) {
   if (state.mode === 'navigating') return;
   const p = { lat: poi.lat, lon: poi.lon };
   state.ctxPoint = p;
@@ -1441,25 +1447,111 @@ map.onPoiTap = async (poi, xy) => {
   const details = $('ctx-details');
   const ref = state.lastFix || map.center;
   const kindText = poi.class === 'bicycle_parking' ? 'Bike rack (from OpenStreetMap)' : humanType(poi);
-  const lines = [el('div', { class: 'type', text: [kindText, state.lastFix ? `${formatDistance(distance(ref, p), units())} away` : null].filter(Boolean).join(' · ') })];
-  details.replaceChildren(...lines);
+  const typeLine = el('div', { class: 'type', text: [kindText, state.lastFix ? `${formatDistance(distance(ref, p), units())} away` : null].filter(Boolean).join(' · ') });
+  details.replaceChildren(typeLine);
   details.hidden = false;
-  positionMenu($('ctx-menu'), xy.x, xy.y);
+  const menu = $('ctx-menu');
+  positionMenu(menu, xy.x, xy.y);
   if (poi.unnamed) return; // nothing more to look up for an unnamed rack
-  // Enrich quietly: address from the geocoder, hours/phone/website from OSM.
   const token = (state.ctxToken = Symbol('poi'));
-  const [rev, more] = await Promise.all([geocode.reverse(p), overpass.placeDetails(poi.name, p)]);
-  if (state.ctxToken !== token || $('ctx-menu').hidden) return;
-  const extra = [];
-  const address = more?.address || rev?.address || null;
-  if (address) extra.push(el('div', { text: address }));
-  if (more?.hours) extra.push(el('div', { text: `Hours: ${more.hours}` }));
-  if (more?.cuisine) extra.push(el('div', { text: `Cuisine: ${more.cuisine.replace(/_/g, ' ').replace(/;/g, ', ')}` }));
-  if (more?.phone) extra.push(el('div', {}, [el('a', { href: `tel:${more.phone.replace(/\s+/g, '')}`, text: more.phone })]));
-  if (more?.website) extra.push(el('div', {}, [el('a', { href: more.website, target: '_blank', rel: 'noopener', text: more.website.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '') })]));
-  details.append(...extra);
-  positionMenu($('ctx-menu'), xy.x, xy.y);
-};
+  const alive = () => state.ctxToken === token && !menu.hidden;
+  const slots = { hours: el('div', { hidden: true }), address: el('div', { hidden: true }), contact: el('div', { hidden: true }), park: el('div', { class: 'park', hidden: true }), wiki: el('div', { class: 'wiki', hidden: true }), photos: el('div', { hidden: true }) };
+  details.append(slots.hours, slots.address, slots.contact, slots.park, slots.wiki, slots.photos);
+  const reposition = () => alive() && positionMenu(menu, xy.x, xy.y);
+
+  // 1) What's inside a park — from the tiles, offline.
+  const isPark = /park|garden|nature|recreation|playground|pitch|golf|cemetery|wood/i.test(`${poi.class} ${poi.subclass} ${poi.kind || ''}`);
+  if (isPark || poi.area) {
+    tileTemplate()
+      .then((tpl) => parkFromTiles(tpl, p, poi.name))
+      .then((park) => {
+        if (!alive() || !park) return;
+        const bits = [formatArea(park.area, units()), describeAmenities(park.amenities)].filter(Boolean);
+        if (!bits.length) return;
+        slots.park.textContent = bits.join(' · ');
+        slots.park.hidden = false;
+        reposition();
+      })
+      .catch(() => {});
+  }
+
+  // 2) Hours, phone, website, address — TomTom first, OSM/Nominatim as fallback.
+  (async () => {
+    let info = null;
+    if (poi.phone || poi.website || poi.hours) info = poi; // a TomTom search row already carries them
+    else if (tomtomActive()) info = await geocode.tomtomPlace(poi.name, p, { key: tomtomKey() }).catch(() => null);
+    let address = info?.fullAddress || null;
+    let hours = info?.hours ? formatHours(info.hours, new Date(), navigator.language) : null;
+    let phone = info?.phone || null;
+    let website = info?.website || null;
+    if (!info && !poi.area) {
+      const [rev, more] = await Promise.all([geocode.reverse(p).catch(() => null), overpass.placeDetails(poi.name, p).catch(() => null)]);
+      address = more?.address || rev?.address || null;
+      phone = more?.phone || null;
+      website = more?.website || null;
+      if (more?.hours) hours = { today: more.hours, openNow: null };
+    } else if (!address) address = (await geocode.reverse(p).catch(() => null))?.address || null;
+    if (!alive()) return;
+    if (hours) {
+      // "Open · closes 10 PM · Today 4 PM – 10 PM" / "Closed · opens 4 PM · Today 4 PM – 10 PM" / "Closed today · opens Tue 4 PM"
+      const closedToday = hours.today.startsWith('Closed');
+      const status = hours.openNow === true ? el('span', { class: 'open', text: 'Open' }) : hours.openNow === false ? el('span', { class: 'closed', text: closedToday ? 'Closed today' : 'Closed' }) : null;
+      const tail = hours.openNow === true && hours.closesAt ? ` · closes ${hours.closesAt}` : hours.openNow === false && hours.opensAt ? ` · opens ${hours.opensAt}` : '';
+      const parts = status ? [status, el('span', { text: tail })] : [];
+      if (!closedToday) parts.push(el('span', { text: `${status ? ' · ' : ''}Today ${hours.today}` }));
+      else if (!status) parts.push(el('span', { text: hours.today }));
+      slots.hours.replaceChildren(...parts);
+      slots.hours.hidden = false;
+    }
+    if (address) {
+      slots.address.textContent = address;
+      slots.address.hidden = false;
+    }
+    const links = [];
+    if (phone) links.push(el('a', { href: `tel:${phone.replace(/[^\d+]/g, '')}`, text: phone }));
+    if (website) links.push(el('a', { href: website, target: '_blank', rel: 'noopener', text: website.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '') }));
+    if (links.length) {
+      slots.contact.replaceChildren(...links.flatMap((a, i) => (i ? [el('span', { text: ' · ' }), a] : [a])));
+      slots.contact.hidden = false;
+    }
+    reposition();
+  })().catch(() => {});
+
+  // 3) Wikipedia paragraph + photo, only when an article is really about this place.
+  wikipediaFor(poi.name, p)
+    .then((w) => {
+      if (!alive() || !w) return;
+      slots.wiki.replaceChildren(
+        ...(w.thumbnail ? [el('img', { src: w.thumbnail, alt: w.title, loading: 'lazy' })] : []),
+        el('div', {}, [el('p', { text: w.extract }), el('a', { class: 'src', href: w.url, target: '_blank', rel: 'noopener', text: 'Wikipedia' })])
+      );
+      slots.wiki.hidden = false;
+      reposition();
+    })
+    .catch(() => {});
+
+  // 4) Nearby photos from Wikimedia Commons — best effort.
+  commonsPhotos(p)
+    .then((photos) => {
+      if (!alive() || !photos.length) return;
+      slots.photos.replaceChildren(
+        el('div', { class: 'photos' }, photos.map((ph) => el('a', { href: ph.url, target: '_blank', rel: 'noopener', title: ph.title }, [el('img', { src: ph.thumb, alt: ph.title, loading: 'lazy' })]))),
+        el('div', { class: 'photos-src muted', text: 'Photos nearby · Wikimedia Commons' })
+      );
+      slots.photos.hidden = false;
+      reposition();
+    })
+    .catch(() => {});
+}
+map.onPoiTap = openPlaceCard;
+
+/** ⓘ on a search row: the same card, without leaving the results. */
+function infoForResult(r) {
+  $('search-results').hidden = true;
+  $('search').blur();
+  const kind = (r.osm || '').replace(/^tomtom=|^tiles=/, '') || r.kind;
+  openPlaceCard({ name: r.label, lat: r.lat, lon: r.lon, class: kind, subclass: r.kind, kind: r.kind, phone: r.phone, website: r.website, hours: r.hours, fullAddress: r.fullAddress }, { x: window.innerWidth / 2, y: 120 });
+}
 $('search-here').addEventListener('click', searchHere);
 map.userInteracted = () => {
   if (state.mode === 'navigating' && map.follow) {

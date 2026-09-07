@@ -97,7 +97,7 @@ export function trackSheetHeight(...elements) {
   return update;
 }
 
-export function renderSearchResults(list, results, onPick, { units = 'metric', numbered = false } = {}) {
+export function renderSearchResults(list, results, onPick, { units = 'metric', numbered = false, onInfo = null } = {}) {
   list.replaceChildren(
     ...results.map((r, i) =>
       el(
@@ -111,6 +111,19 @@ export function renderSearchResults(list, results, onPick, { units = 'metric', n
             el('span', { class: 'addr', text: r.address || '' }),
           ]),
           Number.isFinite(r.distance) ? el('span', { class: 'dist', text: formatDistance(r.distance, units) }) : null,
+          onInfo && Number.isFinite(r.lat) && r.kind !== 'recent'
+            ? el('button', {
+                class: 'info',
+                type: 'button',
+                'aria-label': `Details for ${r.label}`,
+                title: 'Details',
+                text: 'ⓘ',
+                onclick: (e) => {
+                  e.stopPropagation();
+                  onInfo(r);
+                },
+              })
+            : null,
         ]
       )
     )
