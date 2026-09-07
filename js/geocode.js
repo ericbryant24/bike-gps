@@ -370,6 +370,10 @@ export function formatTomTom(r, order = 0) {
     osm: `tomtom=${type}`,
     order,
     tier: order < 3 ? 1 : 2,
+    phone: r.poi?.phone || null,
+    website: r.poi?.url ? (/^https?:/i.test(r.poi.url) ? r.poi.url : `https://${r.poi.url}`) : null,
+    hours: r.poi?.openingHours || null,
+    fullAddress: a.freeformAddress || null,
   };
 }
 
@@ -381,7 +385,7 @@ export function formatTomTom(r, order = 0) {
 export async function tomtomSearch(q, { key, near, bounds, typeahead = false, limit = 10, signal, fetchImpl = globalThis.fetch } = {}) {
   const text = q.trim();
   if (!text || !key) return [];
-  const p = new URLSearchParams({ key, limit: String(limit), typeahead: String(!!typeahead), idxSet: 'POI,PAD,Str,Xstr,Geo', language: globalThis.navigator?.language || 'en-US' });
+  const p = new URLSearchParams({ key, limit: String(limit), typeahead: String(!!typeahead), idxSet: 'POI,PAD,Str,Xstr,Geo', language: globalThis.navigator?.language || 'en-US', openingHours: 'nextSevenDays' });
   if (bounds) {
     p.set('topLeft', `${bounds.maxLat},${bounds.minLon}`);
     p.set('btmRight', `${bounds.minLat},${bounds.maxLon}`);
@@ -408,4 +412,20 @@ export async function tomtomSearch(q, { key, near, bounds, typeahead = false, li
     hits = hits.filter((r) => distance(near, r) < FAR_KM * 1000 || r.osm === 'tomtom=Geography');
   }
   return hits;
+}
+
+/**
+ * TomTom's record for a place tapped on the map: the same-named POI within
+ * 250 m of the point, with phone, website, hours and full address. Null when
+ * TomTom has no such place.
+ */
+export async function tomtomPlace(name, p, { key, signal, fetchImpl = globalThis.fetch } = {}) {
+  const hits = await tomtomSearch(name, { key, near: p, limit: 5, signal, fetchImpl });
+  const norm = (t) => String(t || '').toLowerCase().replace(/[’‘'`´.]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  const n = norm(name);
+  const same = (h) => {
+    const l = norm(h.label);
+    return l === n || l.startsWith(n) || n.startsWith(l);
+  };
+  return hits.find((h) => h.osm === 'tomtom=POI' && distance(p, h) < 250 && same(h)) || null;
 }
