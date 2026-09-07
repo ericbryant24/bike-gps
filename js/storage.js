@@ -32,6 +32,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   autoReroute: true,
   streetNames: true,
   keepAwake: true,
+  bikeRacks: true, // draw bike parking from the tiles and report racks near the destination
   batterySaver: false, // flat north-up map while riding: far less GPU work than the tilted 3D view
   followMode: true,
 });

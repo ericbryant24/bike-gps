@@ -75,7 +75,8 @@ export function extractPlaces(layers) {
     if (!L) continue;
     for (const f of L.features) {
       const p = f.properties || {};
-      const name = p.name || p['name:latin'];
+      const rack = layer === 'poi' && p.class === 'bicycle_parking';
+      const name = p.name || p['name:latin'] || (rack ? 'Bike rack' : '');
       if (!name) continue;
       // Transit stops are numerous and named after the streets they sit on
       // ("Cleveland Ave & Huy Rd"): they'd swamp searches for those streets.
@@ -87,7 +88,9 @@ export function extractPlaces(layers) {
         pt = line[Math.floor(line.length / 2)];
       } else if (f.type === 3) pt = centroid(f.geometry);
       if (!pt) continue;
-      out.push({ name, kind: KIND[layer](p), layer, lon: pt[0], lat: pt[1] });
+      const unnamed = !p.name && !p['name:latin'];
+      // Racks match both "bike rack" and "bike parking" queries.
+      out.push({ name, kind: rack ? 'bike parking' : KIND[layer](p), layer, lon: pt[0], lat: pt[1], unnamed, ...(rack && unnamed ? { norm: 'bike rack parking' } : {}) });
     }
   }
   return out;
@@ -182,10 +185,11 @@ export class PlaceIndex {
             const res = await this.fetchImpl(this.tileUrl.replace('{z}', t.z).replace('{x}', t.x).replace('{y}', t.y), { signal });
             if (res.ok) {
               for (const e of extractPlaces(decodeTile(new Uint8Array(await res.arrayBuffer()), t))) {
-                const k = `${normalize(e.name)}|${e.kind}`;
+                // Unnamed features (bike racks) are each their own entry, not one per name.
+                const k = e.unnamed ? `${e.kind}|${e.lat.toFixed(5)},${e.lon.toFixed(5)}` : `${normalize(e.name)}|${e.kind}`;
                 const d = distance(center, e);
                 const prev = byKey.get(k);
-                if (!prev || d < prev.d) byKey.set(k, { ...e, d, norm: normalize(e.name) });
+                if (!prev || d < prev.d) byKey.set(k, { ...e, d, norm: e.norm || normalize(e.name) });
               }
             }
           } catch (err) {
@@ -212,8 +216,11 @@ export class PlaceIndex {
     const nq = normalize(query).replace(/^\d+[a-z]?\s+(?=\S)/, '');
     if (nq.length < 2) return [];
     const qTokens = nq.split(' ');
+    // Racks are numerous and unnamed: they only answer "bike rack" / "bike parking" queries.
+    const wantsRacks = /\b(racks?|parking)\b/.test(nq);
     const hits = [];
     for (const e of this.entries) {
+      if (e.kind === 'bike parking' && !wantsRacks) continue;
       const tier = matchTier(e.norm, nq, qTokens);
       if (!tier) continue;
       hits.push({ label: e.name, address: '', kind: e.kind, lat: e.lat, lon: e.lon, distance: distance(anchor, e), tier, osm: `tiles=${e.layer}` });
@@ -222,4 +229,42 @@ export class PlaceIndex {
     hits.sort((a, b) => a.tier - b.tier || (a.osm === 'tiles=transportation_name') - (b.osm === 'tiles=transportation_name') || a.distance - b.distance);
     return hits.slice(0, limit);
   }
+}
+
+/** Bike racks in already-decoded tile layers, nearest first, within `radius` metres of `p`. */
+export function racksIn(layers, p, radius = 250) {
+  return extractPlaces(layers)
+    .filter((e) => e.kind === 'bike parking')
+    .map((e) => ({ lat: e.lat, lon: e.lon, distance: distance(p, e) }))
+    .filter((e) => e.distance <= radius)
+    .sort((a, b) => a.distance - b.distance);
+}
+
+/**
+ * Bike racks around a point, fetched from the z14 tiles that cover it (one
+ * to four tiles, usually already in the tile cache). Empty on any failure.
+ */
+export async function racksNear(tileUrl, p, { radius = 250, fetchImpl = (...a) => globalThis.fetch(...a), signal } = {}) {
+  const tiles = tilesAround(p, radius);
+  const found = await Promise.all(
+    tiles.map(async (t) => {
+      try {
+        const res = await fetchImpl(tileUrl.replace('{z}', t.z).replace('{x}', t.x).replace('{y}', t.y), { signal });
+        if (!res.ok) return [];
+        return racksIn(decodeTile(new Uint8Array(await res.arrayBuffer()), t), p, radius);
+      } catch {
+        return [];
+      }
+    })
+  );
+  const seen = new Set();
+  return found
+    .flat()
+    .filter((r) => {
+      const k = `${r.lat.toFixed(6)},${r.lon.toFixed(6)}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    })
+    .sort((a, b) => a.distance - b.distance);
 }
