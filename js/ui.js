@@ -242,6 +242,7 @@ export function renderSettings(settings, onChange, { onClearTiles, onCheckUpdate
     setting('Voice guidance', 'Spoken turn prompts', toggle(settings.voice, (v) => onChange('voice', v))),
     setting('Map style', '3D styles rotate and tilt while navigating', select('tiles', Object.entries(TILE_SOURCES).map(([k, v]) => [k, v.label]))),
     setting('Navigation view', 'Tap the compass while riding to switch', select('navView', [['3d', '3D, heading up'], ['north', 'Flat, north up']])),
+    setting('Bike racks', 'Show bike parking on the map (zoom in) and near your destination', toggle(settings.bikeRacks, (v) => onChange('bikeRacks', v))),
     setting('Crossing blocked roads', 'Default for new blocks; editable per road', select('crossing', Object.entries(CROSSING_RULES))),
     setting('Street names in directions', 'Looks up road names from OpenStreetMap after each route', toggle(settings.streetNames, (v) => onChange('streetNames', v))),
     setting('Auto-reroute', 'Recalculate when you leave the route', toggle(settings.autoReroute, (v) => onChange('autoReroute', v))),

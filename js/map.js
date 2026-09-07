@@ -52,6 +52,31 @@ const NAV_PITCH = 58;
 const NAV_ZOOM = 17.3;
 
 const lnglat = (p) => [p.lon, p.lat];
+
+/** 40×40 badge (drawn at 2× for a 20 px icon): teal disc, white "staple" rack. */
+function rackIcon() {
+  if (typeof document === 'undefined') return null;
+  const c = document.createElement('canvas');
+  c.width = c.height = 40;
+  const ctx = c.getContext('2d');
+  if (!ctx) return null;
+  ctx.beginPath();
+  ctx.arc(20, 20, 17, 0, Math.PI * 2);
+  ctx.fillStyle = '#0f766e';
+  ctx.fill();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = '#ffffff';
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.lineWidth = 3.5;
+  ctx.lineCap = 'round';
+  ctx.moveTo(13, 29);
+  ctx.lineTo(13, 19);
+  ctx.arc(20, 19, 7, Math.PI, 0);
+  ctx.lineTo(27, 29);
+  ctx.stroke();
+  return ctx.getImageData(0, 0, 40, 40);
+}
 const lineFeature = (pts, props = {}) => ({ type: 'Feature', properties: props, geometry: { type: 'LineString', coordinates: pts.map(lnglat) } });
 const fc = (features) => ({ type: 'FeatureCollection', features });
 const EMPTY = fc([]);
@@ -64,8 +89,9 @@ function circlePolygon(center, radius, n = 48) {
 }
 
 export class MapView {
-  constructor(el, { center = { lat: 39.9612, lon: -82.9988 }, zoom = 13, tiles = DEFAULT_TILES } = {}) {
+  constructor(el, { center = { lat: 39.9612, lon: -82.9988 }, zoom = 13, tiles = DEFAULT_TILES, showRacks = true } = {}) {
     this.el = el;
+    this.showRacks = showRacks;
     this.map = new maplibregl.Map({
       container: el,
       style: (TILE_SOURCES[tiles] || TILE_SOURCES[DEFAULT_TILES]).style,
@@ -197,6 +223,41 @@ export class MapView {
       {}
     );
     m.setFilter('blocks-line', ['==', ['geometry-type'], 'LineString']);
+    this.addRackLayer();
+  }
+
+  /**
+   * Bike parking straight from the vector tiles (OpenMapTiles poi class
+   * bicycle_parking, present from z14). Drawn as a small "staple" badge on top
+   * of the base map; toggled with setRacks().
+   */
+  addRackLayer() {
+    const m = this.map;
+    if (!m.getSource('openmaptiles') || m.getLayer('bike-racks')) return;
+    if (!m.hasImage('bike-rack')) {
+      const img = rackIcon();
+      if (img) m.addImage('bike-rack', img, { pixelRatio: 2 });
+    }
+    m.addLayer({
+      id: 'bike-racks',
+      type: 'symbol',
+      source: 'openmaptiles',
+      'source-layer': 'poi',
+      minzoom: 14,
+      filter: ['all', ['==', ['get', 'class'], 'bicycle_parking'], ['==', ['geometry-type'], 'Point']],
+      layout: {
+        'icon-image': 'bike-rack',
+        'icon-size': ['interpolate', ['linear'], ['zoom'], 14, 0.6, 16, 0.9, 18, 1.1],
+        'icon-allow-overlap': true,
+        'icon-ignore-placement': true,
+        visibility: this.showRacks ? 'visible' : 'none',
+      },
+    });
+  }
+
+  setRacks(on) {
+    this.showRacks = !!on;
+    if (this.map.getLayer('bike-racks')) this.map.setLayoutProperty('bike-racks', 'visibility', on ? 'visible' : 'none');
   }
 
   setTiles(id) {
@@ -456,10 +517,12 @@ export class MapView {
     } catch {
       return null;
     }
-    const f = feats.find((x) => x.properties?.name && x.geometry?.type === 'Point');
+    const isRack = (x) => x.properties?.class === 'bicycle_parking';
+    const f = feats.find((x) => x.geometry?.type === 'Point' && (x.properties?.name || isRack(x)));
     if (!f) return null;
     const [lon, lat] = f.geometry.coordinates;
-    return { name: f.properties.name, class: f.properties.class || null, subclass: f.properties.subclass || null, lat, lon };
+    const unnamed = !f.properties.name;
+    return { name: f.properties.name || 'Bike rack', unnamed, class: f.properties.class || null, subclass: f.properties.subclass || null, lat, lon };
   }
 
   // ---------------------------------------------------- roads from the tiles

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { decodeTile, tileAt } from '../js/mvt.js';
-import { extractPlaces, normalize, matchTier, tilesAround, PlaceIndex, editDistance, expandAbbreviations, looksLikeAddress } from '../js/places.js';
+import { extractPlaces, normalize, matchTier, tilesAround, PlaceIndex, editDistance, expandAbbreviations, looksLikeAddress, racksIn } from '../js/places.js';
 
 const tile = { z: 14, x: 4412, y: 6199 };
 const bytes = readFileSync(new URL('./fixtures/tile-14-4412-6199.pbf', import.meta.url));
@@ -90,4 +90,28 @@ test('street abbreviations are spelt out for matching; house numbers are ignored
   assert.equal(looksLikeAddress('315'), false);
   assert.equal(looksLikeAddress('kroger'), false);
   assert.equal(matchTier(normalize('Rosemary Parkway'), normalize('4457 Rosemary Pkwy').replace(/^\d+[a-z]?\s+(?=\S)/, ''), ['rosemary', 'parkway']), 1);
+});
+
+test('bike racks: indexed as "Bike parking", answer only rack/parking queries, listed nearest-first around a point', () => {
+  const layers = { poi: { features: [
+    { type: 1, geometry: [[-83.02, 40.05]], properties: { class: 'bicycle_parking', subclass: 'bicycle_parking', rank: 6 } },
+    { type: 1, geometry: [[-83.0202, 40.0501]], properties: { class: 'bicycle_parking', subclass: 'bicycle_parking', rank: 23 } },
+    { type: 1, geometry: [[-83.03, 40.06]], properties: { class: 'bicycle_parking', subclass: 'bicycle_parking' } },
+    { type: 1, geometry: [[-83.021, 40.05]], properties: { name: 'Bike Shop', class: 'bicycle', subclass: 'bicycle' } },
+  ] } };
+  const places = extractPlaces(layers);
+  assert.equal(places.filter((p) => p.kind === 'bike parking').length, 3);
+  assert.equal(places.find((p) => p.kind === 'bike parking').name, 'Bike rack');
+  assert.equal(places.find((p) => p.kind === 'bike parking').unnamed, true);
+  const near = racksIn(layers, { lat: 40.05, lon: -83.02 }, 250);
+  assert.equal(near.length, 2);
+  assert.ok(near[0].distance < near[1].distance);
+  // Index search: every rack is its own entry; "bike" alone doesn't list them, "bike rack" does.
+  const idx = new PlaceIndex({ tileUrl: 'x' });
+  idx.entries = places.map((e) => ({ ...e, norm: e.norm || normalize(e.name) }));
+  idx.center = { lat: 40.05, lon: -83.02 };
+  idx.radius = 5000;
+  assert.deepEqual(idx.search('bike', idx.center).map((r) => r.label), ['Bike Shop']);
+  assert.equal(idx.search('bike rack', idx.center).length, 3);
+  assert.equal(idx.search('bike parking', idx.center)[0].kind, 'bike parking');
 });

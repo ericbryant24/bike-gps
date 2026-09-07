@@ -7,7 +7,7 @@ import { announceableSteps, applyNames, stepIcon, stepsFromGeometry, stepsFromVo
 import { rateSegments, rateSteps, routeComposition, gradeRuns, GRADES } from './rating.js';
 import { ALTERNATIVE_INDICES, compareAlternatives, dedupeRoutes } from './alternatives.js';
 import { shareUrl, parseSharedRoute, toGpx } from './share.js';
-import { PlaceIndex, INDEX_RADIUS_M, looksLikeAddress } from './places.js';
+import { PlaceIndex, INDEX_RADIUS_M, looksLikeAddress, racksNear } from './places.js';
 import { parseMapLink, unshorten } from './links.js';
 import * as bl from './blocklist.js';
 import { Navigator, simulateRide } from './navigator.js';
@@ -51,6 +51,7 @@ const map = new MapView($('map'), {
   center: savedView?.center || { lat: 39.9612, lon: -82.9988 },
   zoom: savedView?.zoom || 13,
   tiles: state.settings.tiles,
+  showRacks: state.settings.bikeRacks !== false,
 });
 const courseUp = () => state.settings.navView !== 'north' && !state.settings.batterySaver;
 
@@ -338,6 +339,8 @@ function setRoute(route, steps) {
 }
 
 function clearRoute() {
+  $('plan-racks').hidden = true;
+  state.destRacks = null;
   state.planAbort?.abort();
   state.route = null;
   state.alternatives = [];
@@ -358,6 +361,41 @@ function clearRoute() {
   clearSearch();
   store.remove(store.KEYS.lastRoute);
 }
+
+/**
+ * "3 bike racks within 250 m of your destination · nearest 40 m" — from the
+ * z14 tiles around the destination, so it works offline once they're cached.
+ */
+let racksToken = 0;
+async function showRacksNearDest() {
+  const line = $('plan-racks');
+  const dest = state.dest;
+  if (!dest || !state.settings.bikeRacks || state.route?.shared) {
+    line.hidden = true;
+    return;
+  }
+  const token = ++racksToken;
+  let racks = [];
+  try {
+    racks = await racksNear(await tileTemplate(), dest, { radius: RACK_RADIUS_M });
+  } catch {
+    racks = [];
+  }
+  if (token !== racksToken || state.dest !== dest) return;
+  state.destRacks = racks;
+  const within = units() === 'imperial' ? '¼ mile' : `${RACK_RADIUS_M} m`;
+  if (!racks.length) {
+    line.replaceChildren(el('span', { text: `🚲 No mapped bike racks within ${within} of your destination.` }));
+  } else {
+    const n = racks.length;
+    line.replaceChildren(
+      el('strong', { text: `🚲 ${n} bike ${n === 1 ? 'rack' : 'racks'}` }),
+      el('span', { text: ` within ${within} of your destination · nearest ${formatDistance(racks[0].distance, units())} · tap to see` })
+    );
+  }
+  line.hidden = false;
+}
+const RACK_RADIUS_M = 400; // ≈ ¼ mile
 
 function renderSheet() {
   const r = state.route;
@@ -390,6 +428,7 @@ function renderSheet() {
   $('plan-time').textContent = r.shared ? `~${formatDuration(r.time)}` : formatDuration(r.time);
   renderSteps($('steps-list'), state.announceable, units());
   $('sheet').hidden = false;
+  showRacksNearDest();
   $('install-banner').hidden = true;
   if (state.setSheetCollapsed) state.setSheetCollapsed(!!state.sheetCollapsed, { fit: false });
 }
@@ -1399,10 +1438,12 @@ map.onPoiTap = async (poi, xy) => {
   title.classList.add('place');
   const details = $('ctx-details');
   const ref = state.lastFix || map.center;
-  const lines = [el('div', { class: 'type', text: [humanType(poi), state.lastFix ? `${formatDistance(distance(ref, p), units())} away` : null].filter(Boolean).join(' · ') })];
+  const kindText = poi.class === 'bicycle_parking' ? 'Bike rack (from OpenStreetMap)' : humanType(poi);
+  const lines = [el('div', { class: 'type', text: [kindText, state.lastFix ? `${formatDistance(distance(ref, p), units())} away` : null].filter(Boolean).join(' · ') })];
   details.replaceChildren(...lines);
   details.hidden = false;
   positionMenu($('ctx-menu'), xy.x, xy.y);
+  if (poi.unnamed) return; // nothing more to look up for an unnamed rack
   // Enrich quietly: address from the geocoder, hours/phone/website from OSM.
   const token = (state.ctxToken = Symbol('poi'));
   const [rev, more] = await Promise.all([geocode.reverse(p), overpass.placeDetails(poi.name, p)]);
@@ -1622,6 +1663,15 @@ $('layers-btn').addEventListener('click', () => {
 });
 
 $('plan-close').addEventListener('click', clearRoute);
+$('plan-racks').addEventListener('click', () => {
+  if (!state.dest || !state.settings.bikeRacks) return;
+  // Collapse the sheet first so the racks fit in the map that's left visible.
+  state.setSheetCollapsed?.(true, { fit: false });
+  setTimeout(() => {
+    if (state.destRacks?.length) map.fitPoints([state.dest, ...state.destRacks], { top: 110, bottom: $('sheet').offsetHeight + 24, side: 50 });
+    else map.setView(state.dest, 17);
+  }, 320);
+});
 
 // ---- sharing
 async function shareCurrentRoute() {
@@ -1713,6 +1763,10 @@ function openSettings() {
       state.settings[key] = value;
       saveSettings();
       if (key === 'tiles') map.setTiles(value);
+      if (key === 'bikeRacks') {
+        map.setRacks(value);
+        if (state.route) showRacksNearDest();
+      }
       if (key === 'voice') voice.enabled = !!value;
       if (key === 'units') renderSheet();
       if ((key === 'navView' || key === 'batterySaver') && state.mode === 'navigating') {
