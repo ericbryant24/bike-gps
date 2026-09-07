@@ -339,6 +339,7 @@ const FAR_KM = 300; // hits beyond this are dropped when something is near, unle
 export class TomTomUnavailable extends Error {}
 
 const TT_KIND = { POI: '', 'Point Address': 'address', 'Address Range': 'address', Street: 'road', 'Cross Street': 'intersection', Geography: 'place' };
+const TT_NAMES = { PETROL_STATION: 'gas station', PARK_RECREATION_AREA: 'park', HEALTH_CARE_SERVICE: 'health care', MARKET: 'supermarket', RESTAURANT: 'restaurant', CAFE_PUB: 'café / pub', SHOP: 'shop', AUTOMOTIVE_DEALER: 'car dealer', PUBLIC_TRANSPORT_STOP: 'transit stop', GEOGRAPHIC_FEATURE: 'place' };
 const humanise = (s) => String(s || '').toLowerCase().replace(/_/g, ' ');
 
 /** Normalise one TomTom result into the app's result shape. */
@@ -351,7 +352,7 @@ export function formatTomTom(r, order = 0) {
   let kind = TT_KIND[type] ?? humanise(type);
   if (type === 'POI') {
     label = r.poi?.name || a.freeformAddress;
-    kind = humanise(clsName || r.poi?.categories?.[0] || '');
+    kind = TT_NAMES[cls?.code] || humanise(clsName || r.poi?.categories?.[0] || '');
   } else if (type === 'Point Address' || type === 'Address Range') label = [a.streetNumber, a.streetName].filter(Boolean).join(' ') || a.freeformAddress;
   else if (type === 'Street' || type === 'Cross Street') label = a.streetName || a.freeformAddress;
   else {
