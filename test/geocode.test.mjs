@@ -22,6 +22,7 @@ test('TomTom results normalise to our shape; far hits drop when something is nea
   assert.equal(poi.kind, 'restaurant');
   assert.equal(poi.address, '671 N High St, Worthington, OH 43085');
   assert.equal(poi.tier, 1);
+  assert.equal(formatTomTom({ type: 'POI', poi: { name: 'Kroger', classifications: [{ code: 'PETROL_STATION', names: [{ nameLocale: 'en-US', name: 'petrol station' }] }] }, address: {}, position: { lat: 40, lon: -83 } }).kind, 'gas station');
   const addr = formatTomTom({ type: 'Point Address', address: { streetNumber: '4457', streetName: 'Rosemary Parkway', municipality: 'Columbus', countrySubdivision: 'OH', freeformAddress: '4457 Rosemary Parkway, Columbus, OH 43214' }, position: { lat: 40.0525, lon: -83.0226 } }, 4);
   assert.equal(addr.label, '4457 Rosemary Parkway');
   assert.equal(addr.kind, 'address');

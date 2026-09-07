@@ -1012,13 +1012,20 @@ function mergePlaces(primary, extra) {
   const key = (r) => (r.label || '').toLowerCase().replace(/[’‘'`´]/g, '').split(/\s+/)[0];
   const isRoad = (r) => r.kind === 'road' || /^highway=/.test(r.osm || '') || r.osm === 'tiles=transportation_name';
   const roadName = (r) => (r.label || '').toLowerCase().replace(/[’‘'`´.]/g, '');
+  const full = (r) => (r.label || '').toLowerCase().replace(/[’‘'`´.]/g, '').replace(/\s+/g, ' ').trim();
   for (const p of extra) {
-    const dup = out.some(
+    const dup = out.find(
       (r) =>
         (Number.isFinite(r.lat) && Number.isFinite(p.lat) && distance(r, p) < 150 && key(r) === key(p)) ||
+        (Number.isFinite(r.lat) && Number.isFinite(p.lat) && distance(r, p) < 600 && full(r) === full(p)) || // a park's centroid vs its entrance
         (isRoad(r) && isRoad(p) && roadName(r) === roadName(p)) // the same street from tiles and geocoder, different segments
     );
     if (!dup) out.push(p);
+    else {
+      // Same place from two sources: keep the better rank of the two.
+      if ((p.tier ?? 2) < (dup.tier ?? 2)) dup.tier = p.tier;
+      if (Number.isFinite(p.order) && !(Number.isFinite(dup.order) && dup.order <= p.order)) dup.order = p.order;
+    }
   }
   return out;
 }
@@ -1123,6 +1130,9 @@ async function runTomTomSearch(q, anchor, { fromInput, ctrl }) {
   let local = [];
   if (placeIndex?.covers(anchor)) local = placeIndex.search(q, anchor, { limit: 6 });
   else ensurePlaceIndex(anchor, { quiet: true }).catch(() => {});
+  // A nearby place whose name starts with what was typed ("whits" → Whit's)
+  // slots in right behind TomTom's top hit; fuzzier local hits stay below.
+  for (const r of local) if (r.tier === 1) r.order = 0.5;
   if (local.length && fromInput) showResults(local, anchor, { commit: false });
   try {
     const hits = await geocode.tomtomSearch(q, { key: tomtomKey(), near: anchor, typeahead: fromInput, limit: fromInput ? 8 : 12, signal: ctrl.signal });
