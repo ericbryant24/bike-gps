@@ -56,6 +56,17 @@ const map = new MapView($('map'), {
   showRacks: state.settings.bikeRacks !== false,
 });
 const courseUp = () => state.settings.navView !== 'north' && !state.settings.batterySaver;
+
+// Splash: fade once the map has drawn its first frame; never linger past 6 s.
+function hideSplash() {
+  const el = $('splash');
+  if (!el) return;
+  el.classList.add('hide');
+  setTimeout(() => el.remove(), 400);
+}
+map.map.once('load', hideSplash);
+map.map.once('error', hideSplash);
+setTimeout(hideSplash, 6000);
 const pacePower = () => (PACES[state.settings.pace] || PACES[DEFAULT_PACE]).power;
 
 // ------------------------------------------------------------------ helpers
