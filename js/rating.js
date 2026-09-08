@@ -4,6 +4,7 @@
 // Grades: A separated path · B quiet street · C moderate traffic ·
 //         D busy road · E major road. Scores run 0–100 and are bucketed.
 
+import { haltsAlong } from './router.js';
 export const GRADES = {
   A: { label: 'Bike path / separated', color: '#16a34a', min: 85 },
   B: { label: 'Quiet street', color: '#84cc16', min: 70 },
@@ -146,6 +147,7 @@ export function routeComposition(rated) {
  * Adds { grade, score, kind, notes, byGrade, signals, stops } to each step.
  */
 export function rateSteps(steps, rated) {
+  const halts = haltsAlong(rated);
   for (let i = 0; i < steps.length; i++) {
     const s = steps[i];
     const from = s.along;
@@ -154,8 +156,8 @@ export function rateSteps(steps, rated) {
     const kinds = new Map();
     let weighted = 0;
     let total = 0;
-    let signals = 0;
-    let stops = 0;
+    const signals = halts.filter((h) => h.kind === 'signal' && h.along > from && h.along <= to).length;
+    const stops = halts.filter((h) => h.kind === 'stop' && h.along > from && h.along <= to).length;
     for (const seg of rated) {
       const overlap = Math.min(seg.along1, to) - Math.max(seg.along0, from);
       if (overlap <= 0) continue;
@@ -164,10 +166,6 @@ export function rateSteps(steps, rated) {
       total += overlap;
       const key = `${seg.rating.kind}|${seg.rating.notes.filter((n) => n !== 'unlit').join(', ')}`;
       kinds.set(key, (kinds.get(key) || 0) + overlap);
-      if (seg.along1 > from && seg.along1 <= to && seg.nodeTags) {
-        if (/highway=traffic_signals|crossing=traffic_signals/.test(seg.nodeTags)) signals += 1;
-        if (/highway=stop/.test(seg.nodeTags)) stops += 1;
-      }
     }
     if (!total) {
       s.rating = null;

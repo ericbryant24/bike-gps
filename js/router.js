@@ -3,6 +3,53 @@
 
 import { cumulativeDistances } from './geo.js';
 
+/**
+ * Riding paces: the rider power BRouter's time model assumes, and the moving
+ * average that power produces on a typical city route (measured against
+ * brouter.de: 100 W → 11.5 mph, 70 W → 9.1 mph).
+ */
+export const PACES = Object.freeze({
+  relaxed: { power: 65, mps: 3.9, mph: 8.7, kmh: 14 },
+  moderate: { power: 85, mps: 4.65, mph: 10.4, kmh: 16.7 },
+  brisk: { power: 110, mps: 5.5, mph: 12.3, kmh: 19.8 },
+});
+export const DEFAULT_PACE = 'moderate';
+export const SIGNAL_WAIT_S = 25; // expected wait: ~half the cycle, half the time
+export const STOP_WAIT_S = 6;
+
+export function paceFor(bikerPower) {
+  return Object.values(PACES).find((p) => p.power === Number(bikerPower)) || PACES[DEFAULT_PACE];
+}
+
+/**
+ * Halts along the route, clustered by position: OSM tags one signal node per
+ * approach plus a crossing node either side, so one intersection shows up as
+ * three or four nodes within ~40 m. Each cluster is one halt; a signal in the
+ * cluster outranks a stop sign. Returns [{ along, kind: 'signal' | 'stop' }].
+ */
+export function haltsAlong(segments, gap = 40) {
+  const nodes = [];
+  for (const seg of segments || []) {
+    const t = seg.nodeTags || '';
+    if (/highway=traffic_signals|crossing=traffic_signals/.test(t)) nodes.push({ along: seg.along1, kind: 'signal' });
+    else if (/highway=stop/.test(t)) nodes.push({ along: seg.along1, kind: 'stop' });
+  }
+  nodes.sort((a, b) => a.along - b.along);
+  const halts = [];
+  for (const n of nodes) {
+    const last = halts[halts.length - 1];
+    if (last && n.along - last.end <= gap) {
+      last.end = n.along;
+      if (n.kind === 'signal') last.kind = 'signal';
+    } else halts.push({ along: n.along, end: n.along, kind: n.kind });
+  }
+  return halts.map(({ along, kind }) => ({ along, kind }));
+}
+
+export function countHalts(segments) {
+  const halts = haltsAlong(segments);
+  return { signals: halts.filter((h) => h.kind === 'signal').length, stops: halts.filter((h) => h.kind === 'stop').length };
+}
 export const DEFAULT_ENDPOINT = 'https://brouter.de/brouter';
 
 export const PROFILES = [
@@ -23,6 +70,7 @@ export function buildRouteUrl({
   nogos = '',
   polylines = '',
   alternative = 0,
+  bikerPower = null,
 }) {
   const pts = [from, ...vias, to].map((p) => `${f6(p.lon)},${f6(p.lat)}`).join('|');
   const params = new URLSearchParams();
@@ -30,12 +78,14 @@ export function buildRouteUrl({
   if (nogos) params.set('nogos', nogos);
   if (polylines) params.set('polylines', polylines);
   params.set('profile', profile);
+  // Rider effort for the time estimate: overrides the profile's `assign bikerPower`.
+  if (bikerPower && profile !== 'shortest') params.set('profile:bikerPower', String(bikerPower));
   params.set('alternativeidx', String(alternative));
   params.set('format', 'geojson');
   params.set('timode', '2'); // turn instructions as voicehints
   // URLSearchParams encodes "," and "|"; BRouter accepts both forms, but the
   // raw characters keep the URL far shorter.
-  return `${endpoint}?${params.toString().replace(/%2C/g, ',').replace(/%7C/g, '|')}`;
+  return `${endpoint}?${params.toString().replace(/%2C/g, ',').replace(/%7C/g, '|').replace(/%3A/g, ':')}`;
 }
 
 /**
@@ -54,12 +104,24 @@ export function parseRoute(body, meta = {}) {
   const props = feat.properties || {};
   const points = feat.geometry.coordinates.map((c) => ({ lon: c[0], lat: c[1], ele: c[2] }));
   const cum = cumulativeDistances(points);
+  const segments = parseSegments(props.messages, points, cum);
+  const length = Number(props['track-length']) || cum[cum.length - 1];
+  const halts = countHalts(segments);
+  // BRouter's kinematic model never stops; add expected waits at lights and
+  // stop signs. The "shortest" profile has no speed model at all (its
+  // total-time is nonsense), so its riding time comes from the pace instead.
+  const pace = paceFor(meta.bikerPower);
+  const rideTime = meta.profile === 'shortest' ? length / pace.mps : Number(props['total-time']) || length / pace.mps;
+  const stopTime = halts.signals * SIGNAL_WAIT_S + halts.stops * STOP_WAIT_S;
   return {
     points,
     cum,
-    segments: parseSegments(props.messages, points, cum),
-    length: Number(props['track-length']) || cum[cum.length - 1],
-    time: Number(props['total-time']) || 0,
+    segments,
+    length,
+    time: rideTime + stopTime,
+    rideTime,
+    stopTime,
+    halts,
     ascend: Number(props['filtered ascend']) || 0,
     cost: Number(props.cost) || 0,
     voicehints: Array.isArray(props.voicehints) ? props.voicehints : null,
@@ -156,7 +218,7 @@ export async function fetchRoute(params, { fetchImpl = globalThis.fetch, signal,
     const res = await fetchImpl(url, { signal: ctrl.signal });
     const text = await res.text();
     if (!res.ok && !text.trim().startsWith('{')) throw routingError(text || `Routing failed (${res.status})`);
-    return parseRoute(text, { profile: params.profile, from: params.from, to: params.to, nogoIds: params.nogoIds, alternative: params.alternative });
+    return parseRoute(text, { profile: params.profile, from: params.from, to: params.to, nogoIds: params.nogoIds, alternative: params.alternative, bikerPower: params.bikerPower });
   } finally {
     clearTimeout(timer);
   }

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { buildRouteUrl, parseRoute, fetchRoute } from '../js/router.js';
+import { buildRouteUrl, parseRoute, fetchRoute, countHalts, haltsAlong, SIGNAL_WAIT_S, STOP_WAIT_S, PACES } from '../js/router.js';
 
 const fixture = readFileSync(new URL('./fixtures/route.json', import.meta.url), 'utf8');
 
@@ -18,14 +18,38 @@ test('buildRouteUrl produces a BRouter GET url with raw separators', () => {
   assert.equal(u.searchParams.get('alternativeidx'), '0');
   assert.ok(!url.includes('%2C') && !url.includes('%7C'));
   assert.equal(new URL(buildRouteUrl({ from: { lat: 1, lon: 2 }, to: { lat: 3, lon: 4 }, alternative: 2 })).searchParams.get('alternativeidx'), '2');
+  // Rider power override goes through with a raw colon, and never for "shortest".
+  const pw = buildRouteUrl({ from: { lat: 1, lon: 2 }, to: { lat: 3, lon: 4 }, profile: 'trekking', bikerPower: 85 });
+  assert.ok(pw.includes('&profile:bikerPower=85'), pw);
+  assert.ok(!buildRouteUrl({ from: { lat: 1, lon: 2 }, to: { lat: 3, lon: 4 }, profile: 'shortest', bikerPower: 85 }).includes('bikerPower'));
 });
 
 test('parseRoute extracts geometry, stats and hints', () => {
   const r = parseRoute(fixture, { profile: 'trekking' });
   assert.equal(r.points.length, 127);
   assert.equal(r.length, 3413);
-  assert.equal(r.time, 520);
+  assert.equal(r.rideTime, 520); // BRouter's moving time
+  const halts = countHalts(r.segments);
+  assert.deepEqual(r.halts, halts);
+  // 36 raw signal/stop nodes cluster into the real intersections.
+  assert.deepEqual(halts, { signals: 10, stops: 6 });
+  const clustered = haltsAlong([
+    { along1: 100, nodeTags: 'crossing=traffic_signals' },
+    { along1: 112, nodeTags: 'highway=traffic_signals' },
+    { along1: 125, nodeTags: 'crossing=traffic_signals' },
+    { along1: 300, nodeTags: 'highway=stop' },
+    { along1: 327, nodeTags: 'highway=stop' },
+    { along1: 900, nodeTags: 'highway=stop' },
+    { along1: 930, nodeTags: 'highway=traffic_signals' },
+  ]);
+  assert.deepEqual(clustered.map((h) => h.kind), ['signal', 'stop', 'signal']);
+  assert.equal(r.stopTime, halts.signals * SIGNAL_WAIT_S + halts.stops * STOP_WAIT_S);
+  assert.equal(r.time, r.rideTime + r.stopTime);
   assert.equal(r.profile, 'trekking');
+  // "shortest" has no speed model: riding time comes from the pace.
+  const sh = parseRoute(fixture, { profile: 'shortest', bikerPower: PACES.brisk.power });
+  assert.equal(Math.round(sh.rideTime), Math.round(3413 / PACES.brisk.mps));
+  assert.equal(sh.stopTime, r.stopTime);
   assert.ok(Math.abs(r.cum.at(-1) - 3413) < 30);
 });
 

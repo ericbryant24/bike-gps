@@ -2,7 +2,7 @@
 
 import { MapView, TILE_SOURCES, DEFAULT_TILES } from './map.js';
 import { bbox, distance, formatDistance, formatDuration, formatSpeed, pointAtDistance, slicePath } from './geo.js';
-import { fetchRoute } from './router.js';
+import { fetchRoute, PACES, DEFAULT_PACE } from './router.js';
 import { announceableSteps, applyNames, stepIcon, stepsFromGeometry, stepsFromVoiceHints } from './instructions.js';
 import { rateSegments, rateSteps, routeComposition, gradeRuns, GRADES } from './rating.js';
 import { ALTERNATIVE_INDICES, compareAlternatives, dedupeRoutes } from './alternatives.js';
@@ -56,6 +56,7 @@ const map = new MapView($('map'), {
   showRacks: state.settings.bikeRacks !== false,
 });
 const courseUp = () => state.settings.navView !== 'north' && !state.settings.batterySaver;
+const pacePower = () => (PACES[state.settings.pace] || PACES[DEFAULT_PACE]).power;
 
 // ------------------------------------------------------------------ helpers
 const units = () => state.settings.units;
@@ -170,7 +171,7 @@ async function computeRoute(from, to, { signal } = {}) {
   const active = state.blocklist.filter((e) => e.enabled);
   const request = (nogo) =>
     fetchRoute(
-      { endpoint: state.settings.endpoint, from, to, profile: state.settings.profile, nogos: nogo.nogos, polylines: nogo.polylines, nogoIds: nogo.used },
+      { endpoint: state.settings.endpoint, from, to, profile: state.settings.profile, bikerPower: pacePower(), nogos: nogo.nogos, polylines: nogo.polylines, nogoIds: nogo.used },
       { signal }
     );
   let focus = [from, to];
@@ -210,7 +211,7 @@ async function loadAlternatives(from, to, primary, { signal } = {}) {
   const active = state.blocklist.filter((e) => e.enabled);
   const results = await Promise.allSettled(
     ALTERNATIVE_INDICES.map((alternative) =>
-      fetchRoute({ endpoint: state.settings.endpoint, from, to, profile: state.settings.profile, nogos: req.nogos, polylines: req.polylines, nogoIds: req.nogoIds, alternative }, { signal })
+      fetchRoute({ endpoint: state.settings.endpoint, from, to, profile: state.settings.profile, nogos: req.nogos, polylines: req.polylines, nogoIds: req.nogoIds, alternative, bikerPower: pacePower() }, { signal })
     )
   );
   if (signal?.aborted) return [];
@@ -399,11 +400,30 @@ async function showRacksNearDest() {
 }
 const RACK_RADIUS_M = 400; // ≈ ¼ mile
 
+/** "Riding 20 min + ~4 min at 9 lights and 2 stop signs · Moderate pace" */
+function renderTiming(r) {
+  const line = $('plan-timing');
+  if (!r || !Number.isFinite(r.rideTime)) {
+    line.hidden = true;
+    $('plan-time').title = '';
+    return;
+  }
+  const h = r.halts || { signals: 0, stops: 0 };
+  const halts = [h.signals ? `${h.signals} ${h.signals === 1 ? 'light' : 'lights'}` : null, h.stops ? `${h.stops} stop ${h.stops === 1 ? 'sign' : 'signs'}` : null].filter(Boolean).join(' and ');
+  const pace = state.settings.pace || DEFAULT_PACE;
+  const paceText = `${pace[0].toUpperCase()}${pace.slice(1)} pace`;
+  const text = r.stopTime > 0 ? `Riding ${formatDuration(r.rideTime)} + ~${formatDuration(r.stopTime)} at ${halts} · ${paceText}` : `Riding ${formatDuration(r.rideTime)} · no lights or stop signs · ${paceText}`;
+  line.textContent = text;
+  line.hidden = false;
+  $('plan-time').title = text;
+}
+
 function renderSheet() {
   const r = state.route;
   if (!r) return;
   $('plan-dist').textContent = formatDistance(r.length, units());
   $('plan-time').textContent = formatDuration(r.time);
+  renderTiming(r);
   $('plan-ascend').textContent = units() === 'imperial' ? `↗ ${Math.round(r.ascend * 3.28084)} ft` : `↗ ${Math.round(r.ascend)} m`;
   $('plan-dest').textContent = state.destLabel || 'Dropped pin';
   renderProfileChips($('profile-chips'), state.settings.profile, (id) => {
@@ -1867,7 +1887,7 @@ function openSettings() {
         map.setFollow(true, state.lastFix || state.route?.from, { courseUp: courseUp(), heading: state.nav?.state?.bearing ?? null });
         updateCompass();
       }
-      if (key === 'endpoint' && state.route) planRoute();
+      if ((key === 'endpoint' || key === 'pace') && state.route) planRoute();
       if (key === 'tomtomKey') {
         state.tomtomDownUntil = 0;
         state.tomtomWarned = false;

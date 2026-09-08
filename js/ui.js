@@ -1,6 +1,7 @@
 // DOM helpers and view renderers. Knows nothing about routing or GPS.
 
 import { formatDistance, formatDuration } from './geo.js';
+import { PACES } from './router.js';
 import { stepIcon } from './instructions.js';
 import { TILE_SOURCES } from './map.js';
 import { PROFILES } from './router.js';
@@ -253,6 +254,14 @@ export function renderSettings(settings, onChange, { onClearTiles, onCheckUpdate
   return el('div', {}, [
     setting('Units', null, select('units', [['metric', 'Metric (km)'], ['imperial', 'Imperial (mi)']])),
     setting('Voice guidance', 'Spoken turn prompts', toggle(settings.voice, (v) => onChange('voice', v))),
+    setting(
+      'Riding pace',
+      'Effort the time estimate assumes (hills still count). Waits at lights and stop signs are added on top.',
+      select(
+        'pace',
+        Object.entries(PACES).map(([id, p]) => [id, `${id[0].toUpperCase()}${id.slice(1)} · ~${settings.units === 'imperial' ? `${Math.round(p.mph)} mph` : `${Math.round(p.kmh)} km/h`} moving`])
+      )
+    ),
     setting('Map style', '3D styles rotate and tilt while navigating', select('tiles', Object.entries(TILE_SOURCES).map(([k, v]) => [k, v.label]))),
     setting('Navigation view', 'Tap the compass while riding to switch', select('navView', [['3d', '3D, heading up'], ['north', 'Flat, north up']])),
     setting('Bike racks', 'Show bike parking on the map (zoom in) and near your destination', toggle(settings.bikeRacks, (v) => onChange('bikeRacks', v))),
