@@ -2083,6 +2083,9 @@ function setupSheet() {
   };
   const setCollapsed = (on, { fit = true } = {}) => {
     sheet.style.setProperty('--peek-h', `${peekHeight()}px`);
+    // A collapsed sheet must show its grip: if the user had scrolled down (e.g. to
+    // the bike-racks line) the peek window would otherwise show the middle of it.
+    if (on) sheet.scrollTop = 0;
     sheet.classList.toggle('collapsed', on);
     state.sheetCollapsed = on;
     grip.setAttribute('aria-expanded', String(!on));
@@ -2095,6 +2098,12 @@ function setupSheet() {
     if (e.button && e.button !== 0) return;
     drag = { y0: e.clientY, t0: performance.now(), h0: sheet.offsetHeight, moved: false, target: e.target };
     sheet.style.setProperty('--peek-h', `${peekHeight()}px`);
+    // Touch captures implicitly; a mouse needs this to keep receiving moves once it leaves the grip.
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* not supported */
+    }
   };
   const onMove = (e) => {
     if (!drag) return;
