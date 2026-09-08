@@ -169,3 +169,69 @@ test('without traffic-light data the signals rule leaves junctions open; wide ga
   const legacy = bl.normalizeEntry({ ...JSON.parse(JSON.stringify(unknown)), signalsKnown: undefined });
   assert.equal(legacy.signalsKnown, true);
 });
+
+test('gates and junction circles near a traffic light are weighted (jog zone), the rest stay hard', () => {
+  // A 600 m road with side streets every 100 m; the light is at 300 m and its
+  // offset partner junction sits 50 m further on.
+  const junctions = [100, 200, 300, 350, 400, 500].map((d) => g.destination(A, 90, d));
+  const line = [A, ...junctions, g.destination(A, 90, 600)]; // junction nodes are vertices, as in OSM
+  const light = g.destination(A, 90, 300);
+  const lit = bl.createStretch(line, { junctions, signals: [light] });
+  const gateItems = bl.gateItemsForEntry(lit);
+  const cum = g.cumulativeDistances(line);
+  for (const { points, soft } of gateItems) {
+    const along = g.snapToPath(g.interpolate(points[0], points[1], 0.5), line, cum, 0, line.length).along;
+    assert.equal(soft, Math.abs(along - 300) <= bl.JOG_DISTANCE, `gate at ${Math.round(along)} m`);
+  }
+  assert.ok(gateItems.some((it) => it.soft) && gateItems.some((it) => !it.soft));
+  const circles = bl.junctionBlockItemsForEntry(lit);
+  assert.equal(circles.length, 5); // the light itself is not closed
+  assert.deepEqual(
+    circles.map((c) => c.soft),
+    junctions.filter((j) => g.distance(j, light) > 1).map((j) => g.distance(j, light) <= bl.JOG_DISTANCE)
+  );
+
+  const params = bl.toNogoParams([lit], null);
+  const gates = params.polylines.split('|');
+  const softGates = gates.filter((s) => s.split(',').length === 5);
+  assert.ok(softGates.length > 0 && softGates.length < gates.length);
+  for (const s of softGates) assert.ok(s.endsWith(`,${bl.JOG_WEIGHT}`));
+  const nogos = params.nogos.split('|');
+  const softCircles = nogos.filter((s) => s.split(',').length === 4);
+  assert.equal(softCircles.length, 1); // only the offset partner at 350 m
+  assert.ok(softCircles[0].endsWith(`,${bl.JUNCTION_BLOCK_RADIUS},${bl.jogCircleWeight()}`));
+  assert.equal(nogos.length - softCircles.length, 4);
+
+  // A global soft weight overrides the jog weight so soft mode stays uniform.
+  const soft = bl.toNogoParams([lit], null, { weight: bl.SOFT_WEIGHT });
+  for (const s of soft.polylines.split('|')) assert.ok(s.endsWith(`,${bl.SOFT_WEIGHT}`));
+  for (const s of soft.nogos.split('|')) assert.ok(s.endsWith(`,${bl.SOFT_WEIGHT}`));
+  // jogDistance 0 disables the jog zone entirely.
+  assert.equal(bl.toNogoParams([lit], null, { jogDistance: 0 }).polylines.split('|').filter((s) => s.split(',').length === 5).length, 0);
+});
+
+test('no jog zone without light data, and none under the "all" rule where no light is known', () => {
+  const junctions = [100, 150, 200].map((d) => g.destination(A, 90, d));
+  const line = [A, ...junctions, g.destination(A, 90, 300)];
+  const unknown = bl.createStretch(line, { junctions, signals: [], signalsKnown: false });
+  assert.ok(bl.gateItemsForEntry(unknown).every((it) => !it.soft));
+  const dark = bl.createStretch(line, { junctions, crossing: 'all' });
+  assert.ok(bl.gateItemsForEntry(dark).every((it) => !it.soft));
+  assert.equal(bl.junctionBlockItemsForEntry(dark).length, 0);
+  // Under 'all', a light still opens a jog for offset side streets.
+  const litAll = bl.createStretch(line, { junctions, signals: [junctions[0]], crossing: 'all' });
+  assert.ok(bl.gateItemsForEntry(litAll).some((it) => it.soft));
+});
+
+test('entriesUsedByRoute ignores the allowed jog next to a traffic light', () => {
+  const junctions = [100, 150, 200].map((d) => g.destination(A, 90, d));
+  const road = [A, ...junctions, g.destination(A, 90, 300)];
+  const lit = bl.createStretch(road, { name: 'High St', junctions, signals: [junctions[0]] });
+  // Cross at the light, jog 50 m along the road to the offset side street, leave.
+  const jog = { points: [g.destination(junctions[0], 180, 60), junctions[0], junctions[1], g.destination(junctions[1], 0, 60)] };
+  assert.deepEqual(bl.entriesUsedByRoute(jog, [lit]), []);
+  // Riding the whole road is still reported.
+  const ride = { points: road };
+  assert.equal(bl.entriesUsedByRoute(ride, [lit]).length, 1);
+  assert.ok(bl.entriesUsedByRoute(ride, [lit])[0].meters >= 150);
+});

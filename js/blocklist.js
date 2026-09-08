@@ -18,6 +18,14 @@
 //                         lights; every other junction along the road gets a
 //                         small no-go circle so it can't be crossed either.
 //   'all'               – crossing is allowed at every junction.
+//
+// Offset junctions: where the side streets either side of a traffic light
+// don't line up (W Weisheimer meets High 48 m south of E Weisheimer), crossing
+// at the light means riding a few dozen metres along the blocked road. Gates
+// and junction circles within JOG_DISTANCE of a signalled junction are sent
+// as *weighted* no-gos instead of hard ones: the jog is allowed but costs
+// about JOG_WEIGHT, so a straight crossing at a light is always preferred
+// and the road stays closed to through riding.
 
 import {
   bbox,
@@ -43,6 +51,12 @@ export const CROSSING_RULES = { signals: 'Only at traffic lights', all: 'At any 
 export const DEFAULT_CROSSING = 'signals';
 export const MAX_NOGO_BYTES = 20000; // brouter.de rejects URLs somewhere above ~25 KB (HTTP 414)
 export const SOFT_WEIGHT = 100; // penalty weight used when no route can avoid every block
+export const JOG_DISTANCE = 80; // metres from a traffic light within which a short ride along the road is allowed
+// Penalty for a jog (BRouter cost units ≈ metres of quiet street). A weighted
+// polyline costs its weight once per crossing; a weighted circle costs weight
+// per metre inside it, so the circle weight is scaled to the circle's diameter.
+export const JOG_WEIGHT = 150;
+export const jogCircleWeight = (jogWeight = JOG_WEIGHT) => jogWeight / (2 * JUNCTION_BLOCK_RADIUS);
 
 let counter = 0;
 export function newId() {
@@ -134,11 +148,34 @@ export function isSignalled(junction, signals) {
   return (signals || []).some((s) => distance(s, junction) <= SIGNAL_MATCH_DISTANCE);
 }
 
-/** Circles that close unsignalled junctions under the 'signals' crossing rule. */
-export function junctionBlocksForEntry(entry) {
+/** Crossable junctions that have a traffic light (empty when light data is unknown). */
+export function signalledJunctions(entry) {
+  if (entry.kind === 'point' || entry.signalsKnown === false) return [];
+  return crossableJunctions(entry).filter((j) => isSignalled(j, entry.signals));
+}
+
+/** True when `p` is close enough to a traffic light on the road for a jog along it to be allowed. */
+export function inJogZone(p, lights, jogDistance = JOG_DISTANCE) {
+  return jogDistance > 0 && (lights || []).some((s) => distance(s, p) <= jogDistance);
+}
+
+/**
+ * Circles that close unsignalled junctions under the 'signals' crossing rule,
+ * as { center, soft }: `soft` marks junctions within JOG_DISTANCE of a light,
+ * which are penalised rather than closed so an offset light can be reached.
+ */
+export function junctionBlockItemsForEntry(entry, { jogDistance = JOG_DISTANCE } = {}) {
   if (entry.kind === 'point' || (entry.crossing || DEFAULT_CROSSING) !== 'signals') return [];
   if (entry.signalsKnown === false) return []; // no light data: don't close junctions on a guess
-  return crossableJunctions(entry).filter((j) => !isSignalled(j, entry.signals));
+  const lights = signalledJunctions(entry);
+  return crossableJunctions(entry)
+    .filter((j) => !isSignalled(j, entry.signals))
+    .map((j) => ({ center: j, soft: inJogZone(j, lights, jogDistance) }));
+}
+
+/** Circles that close unsignalled junctions under the 'signals' crossing rule. */
+export function junctionBlocksForEntry(entry) {
+  return junctionBlockItemsForEntry(entry).map((it) => it.center);
 }
 
 export function entryBBox(entry) {
@@ -195,15 +232,27 @@ export function gatesForLine(line, { junctions = [], halfWidth = GATE_HALF_WIDTH
   return gates;
 }
 
-export function gatesForEntry(entry) {
+/**
+ * Gates for an entry as { points: [a, b], soft }. `soft` marks gates within
+ * JOG_DISTANCE of a traffic light on the road: they are sent as penalties so
+ * a rider can jog along the road between offset side streets at the light.
+ */
+export function gateItemsForEntry(entry, { jogDistance = JOG_DISTANCE } = {}) {
   if (entry.kind === 'point' || !entry.lines) return [];
   const out = [];
   const halfWidth = Number.isFinite(entry.gateHalfWidth) ? entry.gateHalfWidth : GATE_HALF_WIDTH;
+  const lights = signalledJunctions(entry);
   for (const line of entry.lines) {
     // Light simplification so densely-noded curves don't produce a gate per metre.
-    out.push(...gatesForLine(simplify(line, 0.5), { junctions: entry.junctions, halfWidth }));
+    for (const points of gatesForLine(simplify(line, 0.5), { junctions: entry.junctions, halfWidth })) {
+      out.push({ points, soft: inJogZone(interpolate(points[0], points[1], 0.5), lights, jogDistance) });
+    }
   }
   return out;
+}
+
+export function gatesForEntry(entry) {
+  return gateItemsForEntry(entry).map((it) => it.points);
 }
 
 const f6 = (n) => n.toFixed(6).replace(/\.?0+$/, '');
@@ -226,12 +275,16 @@ export const RELAX_RADIUS = 150; // metres around start/destination where blocks
  *
  * Returns { nogos, polylines, used, truncated, dropped, total }.
  */
-export function toNogoParams(entries, routeBBox, { maxBytes = MAX_NOGO_BYTES, relaxAround = [], focus = null, weight = null } = {}) {
+export function toNogoParams(entries, routeBBox, { maxBytes = MAX_NOGO_BYTES, relaxAround = [], focus = null, weight = null, jogWeight = JOG_WEIGHT, jogDistance = JOG_DISTANCE } = {}) {
   // A rider standing on a blocked road must be able to ride off it (and reach
   // a destination on one), so gates and circles right next to the trip's end
   // points are dropped for that request.
   const relaxed = (p, extra = 0) => relaxAround.some((z) => distance(z.point, p) <= (z.radius ?? RELAX_RADIUS) + extra);
+  // A global `weight` softens everything alike; otherwise only jog-zone items
+  // carry a weight (a gate's is charged once per crossing, a circle's per metre).
   const suffix = weight == null ? '' : `,${Math.round(weight)}`;
+  const gateSuffix = (soft) => (weight != null || !soft ? suffix : `,${Math.round(jogWeight)}`);
+  const circleSuffix = (soft) => (weight != null || !soft ? suffix : `,${Math.round(jogCircleWeight(jogWeight) * 10) / 10}`);
   const items = [];
 
   for (const e of entries) {
@@ -243,13 +296,13 @@ export function toNogoParams(entries, routeBBox, { maxBytes = MAX_NOGO_BYTES, re
       items.push({ id: e.id, kind: 'circle', pos: e.center, str: `${f6(e.center.lon)},${f6(e.center.lat)},${Math.round(e.radius)}${suffix}` });
       continue;
     }
-    for (const g of gatesForEntry(e)) {
+    for (const { points: g, soft } of gateItemsForEntry(e, { jogDistance })) {
       if (relaxed(g[0]) || relaxed(g[1])) continue;
-      items.push({ id: e.id, kind: 'gate', pos: interpolate(g[0], g[1], 0.5), str: `${f6(g[0].lon)},${f6(g[0].lat)},${f6(g[1].lon)},${f6(g[1].lat)}${suffix}` });
+      items.push({ id: e.id, kind: 'gate', soft, pos: interpolate(g[0], g[1], 0.5), str: `${f6(g[0].lon)},${f6(g[0].lat)},${f6(g[1].lon)},${f6(g[1].lat)}${gateSuffix(soft)}` });
     }
-    for (const j of junctionBlocksForEntry(e)) {
+    for (const { center: j, soft } of junctionBlockItemsForEntry(e, { jogDistance })) {
       if (relaxed(j, JUNCTION_BLOCK_RADIUS)) continue;
-      items.push({ id: e.id, kind: 'circle', pos: j, str: `${f6(j.lon)},${f6(j.lat)},${JUNCTION_BLOCK_RADIUS}${suffix}` });
+      items.push({ id: e.id, kind: 'circle', soft, pos: j, str: `${f6(j.lon)},${f6(j.lat)},${JUNCTION_BLOCK_RADIUS}${circleSuffix(soft)}` });
     }
   }
 
@@ -284,13 +337,18 @@ export function entriesUsedByRoute(route, entries, { step = 15, maxDist = 8, min
   const active = entries.filter((e) => e.enabled && e.kind !== 'point' && e.lines?.length);
   if (!active.length || !route?.points?.length) return [];
   const rb = bbox(route.points, 20);
-  const candidates = active.filter((e) => bboxIntersects(entryBBox(e), rb)).map((e) => ({ e, lines: e.lines.map((l) => ({ l, cum: cumulativeDistances(l) })), meters: 0 }));
+  // Metres within the jog zone of a traffic light are the allowed offset-junction
+  // jog, not riding along the road, so they are not counted.
+  const candidates = active
+    .filter((e) => bboxIntersects(entryBBox(e), rb))
+    .map((e) => ({ e, lines: e.lines.map((l) => ({ l, cum: cumulativeDistances(l) })), lights: signalledJunctions(e), meters: 0 }));
   if (!candidates.length) return [];
   const cum = route.cum || cumulativeDistances(route.points);
   const total = cum[cum.length - 1];
   for (let d = 0; d <= total; d += step) {
     const p = pointAtDistance(route.points, cum, d).point;
     for (const c of candidates) {
+      if (inJogZone(p, c.lights)) continue;
       if (c.lines.some(({ l, cum: lc }) => snapToPath(p, l, lc, 0, l.length).dist < maxDist)) c.meters += step;
     }
   }
