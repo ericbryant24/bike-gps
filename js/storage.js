@@ -23,6 +23,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   units: localeIsImperial() ? 'imperial' : 'metric',
   voice: true,
   profile: 'trekking',
+  pace: 'moderate', // riding effort the time estimate assumes: relaxed | moderate | brisk
   tiles: 'liberty',
   navView: '3d', // '3d' course-up perspective | 'north' north-up flat
   crossing: 'signals', // default crossing rule for new blocked roads
