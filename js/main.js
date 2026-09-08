@@ -410,12 +410,30 @@ function renderTiming(r) {
   }
   const h = r.halts || { signals: 0, stops: 0 };
   const halts = [h.signals ? `${h.signals} ${h.signals === 1 ? 'light' : 'lights'}` : null, h.stops ? `${h.stops} stop ${h.stops === 1 ? 'sign' : 'signs'}` : null].filter(Boolean).join(' and ');
-  const pace = state.settings.pace || DEFAULT_PACE;
-  const paceText = `${pace[0].toUpperCase()}${pace.slice(1)} pace`;
-  const text = r.stopTime > 0 ? `Riding ${formatDuration(r.rideTime)} + ~${formatDuration(r.stopTime)} at ${halts} · ${paceText}` : `Riding ${formatDuration(r.rideTime)} · no lights or stop signs · ${paceText}`;
-  line.textContent = text;
+  const pace = PACES[state.settings.pace] ? state.settings.pace : DEFAULT_PACE;
+  const speed = units() === 'imperial' ? `~${Math.round(PACES[pace].mph)} mph` : `~${Math.round(PACES[pace].kmh)} km/h`;
+  const paceText = `${pace[0].toUpperCase()}${pace.slice(1)} pace · ${speed}`;
+  const text = r.stopTime > 0 ? `Riding ${formatDuration(r.rideTime)} + ~${formatDuration(r.stopTime)} at ${halts} · ` : `Riding ${formatDuration(r.rideTime)} · no lights or stop signs · `;
+  // The pace is a button: tap to cycle Relaxed → Moderate → Brisk and replan.
+  const order = Object.keys(PACES);
+  const next = order[(order.indexOf(pace) + 1) % order.length];
+  line.replaceChildren(
+    el('span', { text }),
+    el('button', {
+      class: 'pace',
+      type: 'button',
+      text: paceText,
+      title: `Tap for ${next} pace`,
+      'aria-label': `${paceText}. Tap for ${next} pace`,
+      onclick: () => {
+        state.settings.pace = next;
+        saveSettings();
+        planRoute();
+      },
+    })
+  );
   line.hidden = false;
-  $('plan-time').title = text;
+  $('plan-time').title = `${text}${paceText}`;
 }
 
 function renderSheet() {
