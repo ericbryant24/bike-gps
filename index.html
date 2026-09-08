@@ -15,10 +15,41 @@
   <link rel="manifest" href="./app.webmanifest" />
   <link rel="icon" href="./icons/icon-192.png" type="image/png" />
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+  <link rel="apple-touch-startup-image" media="screen and (device-width: 440px) and (device-height: 956px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="./splash/iphone-17-pro-max.png" />
+  <link rel="apple-touch-startup-image" media="screen and (device-width: 420px) and (device-height: 912px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="./splash/iphone-air.png" />
+  <link rel="apple-touch-startup-image" media="screen and (device-width: 430px) and (device-height: 932px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="./splash/iphone-16-pro-max.png" />
+  <link rel="apple-touch-startup-image" media="screen and (device-width: 428px) and (device-height: 926px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="./splash/iphone-16-plus.png" />
+  <link rel="apple-touch-startup-image" media="screen and (device-width: 402px) and (device-height: 874px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="./splash/iphone-16-pro.png" />
+  <link rel="apple-touch-startup-image" media="screen and (device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="./splash/iphone-16.png" />
+  <link rel="apple-touch-startup-image" media="screen and (device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="./splash/iphone-14.png" />
+  <link rel="apple-touch-startup-image" media="screen and (device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="./splash/iphone-13-mini.png" />
+  <link rel="apple-touch-startup-image" media="screen and (device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="./splash/iphone-11-pro-max.png" />
+  <link rel="apple-touch-startup-image" media="screen and (device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="./splash/iphone-11.png" />
+  <link rel="apple-touch-startup-image" media="screen and (device-width: 414px) and (device-height: 736px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="./splash/iphone-8-plus.png" />
+  <link rel="apple-touch-startup-image" media="screen and (device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="./splash/iphone-8.png" />
+  <style>
+    /* Splash: shown before the stylesheet and map arrive, hidden by main.js once the map is ready. */
+    #splash { position: fixed; inset: 0; z-index: 5000; background: #0f766e; color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; transition: opacity 0.35s ease; }
+    #splash svg { width: 42vw; max-width: 220px; height: auto; }
+    #splash .wordmark { font: 600 22px/1 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; letter-spacing: 0.02em; }
+    #splash.hide { opacity: 0; pointer-events: none; }
+    @media (prefers-reduced-motion: reduce) { #splash { transition: none; } }
+  </style>
   <link rel="stylesheet" href="./vendor/maplibre/maplibre-gl.css" />
   <link rel="stylesheet" href="./css/app.css" />
 </head>
 <body>
+  <div id="splash" aria-hidden="true">
+    <svg viewBox="0 0 100 100" role="img" aria-label="Bike GPS">
+      <polyline points="25.2,81.6 25.2,53.6 51.2,53.6 51.2,31.6 73.2,31.6" fill="none" stroke="#083c38" stroke-opacity="0.55" stroke-width="10.4" stroke-linecap="round" stroke-linejoin="round" />
+      <polyline points="24,80 24,52 50,52 50,30 72,30" fill="none" stroke="#fff" stroke-width="9.6" stroke-linecap="round" stroke-linejoin="round" />
+      <circle cx="24" cy="80" r="7.5" fill="#fff" /><circle cx="24" cy="80" r="3.2" fill="#0f766e" />
+      <rect x="64" y="14.5" width="22" height="31" rx="11" fill="#fff" />
+      <rect x="66.5" y="17" width="17" height="26" rx="8.5" fill="#ef4444" />
+      <circle cx="75" cy="24" r="2.6" fill="#fff" />
+    </svg>
+    <div class="wordmark">Bike GPS</div>
+  </div>
   <div id="app">
     <div id="map" role="application" aria-label="Map"></div>
 
