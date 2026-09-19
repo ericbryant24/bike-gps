@@ -1,6 +1,6 @@
 // DOM helpers and view renderers. Knows nothing about routing or GPS.
 
-import { formatDistance, formatDuration } from './geo.js';
+import { formatDistance, formatDuration, distance } from './geo.js';
 import { PACES } from './router.js';
 import { stepIcon } from './instructions.js';
 import { TILE_SOURCES } from './map.js';
@@ -108,7 +108,7 @@ export function renderSearchResults(list, results, onPick, { units = 'metric', n
           numbered ? el('span', { class: 'num', text: String(i + 1) }) : null,
           el('div', { class: 'body' }, [
             el('span', { class: 'name', text: r.label }),
-            r.kind ? el('span', { class: 'kind', text: r.kind }) : null,
+            r.kind ? el('span', { class: `kind${r.kind === 'saved' ? ' saved' : ''}`, text: r.kind === 'saved' ? '★ saved' : r.kind }) : null,
             el('span', { class: 'addr', text: r.address || '' }),
           ]),
           Number.isFinite(r.distance) ? el('span', { class: 'dist', text: formatDistance(r.distance, units) }) : null,
@@ -290,6 +290,33 @@ export function renderSettings(settings, onChange, { onClearTiles, onCheckUpdate
     setting('Cached map tiles', 'Free up storage', el('button', { class: 'secondary', text: 'Clear', onclick: onClearTiles })),
     setting('App version', version ? `Bike GPS ${version}` : 'Bike GPS', el('button', { class: 'secondary', text: 'Check for updates', onclick: onCheckUpdate })),
   ]);
+}
+
+/** Saved places list: tap to route, rename, show on map, delete. */
+export function renderFavorites(list, units, anchor, { onRoute, onRename, onShow, onDelete }) {
+  if (!list.length) {
+    return el('div', { class: 'empty' }, [
+      el('div', { class: 'big', text: '★' }),
+      el('div', { text: 'No saved places yet.' }),
+      el('p', { class: 'hint', text: 'Tap a place on the map and choose "Save place", or use ⋯ → "Save destination" on a planned route. Saved places show as ★ pins and come first in search.' }),
+    ]);
+  }
+  return el(
+    'div',
+    {},
+    list.map((f) =>
+      el('div', { class: 'entry' }, [
+        el('span', { class: 'ico star', text: '★' }),
+        el('div', { class: 'info', onclick: () => onRoute(f) }, [
+          el('div', { class: 'name', text: f.name }),
+          el('div', { class: 'meta', text: [f.label && f.label !== f.name ? f.label : null, anchor ? `${formatDistance(distance(anchor, f), units)} away` : null].filter(Boolean).join(' · ') || 'Tap to route here' }),
+        ]),
+        el('button', { class: 'icon-btn', title: 'Rename', 'aria-label': `Rename ${f.name}`, text: '✎', onclick: () => onRename(f) }),
+        el('button', { class: 'icon-btn', title: 'Show on map', 'aria-label': `Show ${f.name} on map`, text: '🗺', onclick: () => onShow(f) }),
+        el('button', { class: 'icon-btn', title: 'Delete', 'aria-label': `Delete ${f.name}`, text: '🗑', onclick: () => onDelete(f) }),
+      ])
+    )
+  );
 }
 
 export function renderBlocklist(entries, units, { onToggle, onEdit, onShow, onDelete, onClear, onExport, onImport }) {

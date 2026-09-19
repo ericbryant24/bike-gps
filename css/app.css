@@ -379,6 +379,12 @@ button:disabled { opacity: 0.5; cursor: default; }
    sit exactly on the box's bottom edge or the pin appears offset from its
    coordinate (visibly so when zoomed out). A 20 px square rotated 45° has its
    corner 14.1 px below its centre: top = 40 - 14.1 - 10 ≈ 16 px. */
+.fav-pin { width: 26px; height: 26px; border-radius: 50%; border: 2px solid #fff; background: #f59e0b; color: #fff; padding: 0; cursor: pointer; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35); display: grid; place-items: center; font-size: 14px; line-height: 1; }
+.fav-pin:active { transform: scale(0.94); }
+.results li .kind.saved { color: #b45309; }
+.fav-form input { width: 100%; box-sizing: border-box; font: inherit; font-size: 17px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel-solid); color: var(--fg); }
+.fav-form .chips { margin: 10px 0 14px; }
+.entry .ico.star { color: #f59e0b; }
 .pin { width: 28px; height: 40px; }
 .pin::before {
   content: ""; position: absolute; left: 4px; top: 16px; width: 20px; height: 20px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg);

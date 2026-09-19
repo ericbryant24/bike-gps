@@ -34,6 +34,7 @@ const SHELL = [
   './js/links.js',
   './js/config.js',
   './js/details.js',
+  './js/favorites.js',
   './js/instructions.js',
   './js/blocklist.js',
   './js/navigator.js',
