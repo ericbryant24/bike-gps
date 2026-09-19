@@ -140,10 +140,10 @@ export function renderProfileChips(container, active, onPick) {
   );
 }
 
-export function renderSteps(list, steps, units) {
+export function renderSteps(list, steps, units, { onPick = null } = {}) {
   list.replaceChildren(
-    ...steps.map((s) =>
-      el('li', {}, [
+    ...steps.map((s, i) =>
+      el('li', onPick ? { tabindex: 0, role: 'button', onclick: () => onPick(s, i), onkeydown: (e) => e.key === 'Enter' && onPick(s, i) } : {}, [
         el('span', { class: 'ico', text: stepIcon(s) }),
         el('div', { class: 'txt' }, [
           el('div', { text: s.text }),
@@ -185,7 +185,7 @@ export function renderComposition(container, comp, units) {
   );
   container.replaceChildren(
     el('div', { class: 'row between comp-head' }, [
-      el('span', { text: `Bike-friendliness ${comp.grade} · ${GRADES[comp.grade].label}` }),
+      el('span', { text: `Bike-friendliness · ${GRADES[comp.grade].label}` }),
       el('span', { class: 'sub', text: `${Math.round(comp.friendlyShare * 100)}% on paths & quiet streets` }),
     ]),
     bar,
@@ -211,7 +211,9 @@ export function renderAlternatives(container, rows, selected, units, onPick, { p
   }
   container.replaceChildren(
     el('div', { class: 'alts-head', text: 'Route options' }),
-    ...rows.map(({ route, exposure, badges }) => {
+    ...rows.map(({ route, exposure, badges: won }) => {
+      // Winning every category reads as one word, not three tags that wrap.
+      const badges = won.length >= 3 ? ['Recommended'] : won;
       const active = route === selected;
       const busy = exposure.busy >= 25 ? `${formatDistance(exposure.busy, units)} on busy roads` : 'No busy roads';
       return el(
@@ -224,7 +226,7 @@ export function renderAlternatives(container, rows, selected, units, onPick, { p
               el('span', { text: formatDistance(route.length, units) }),
               el('span', { class: 'dot', text: '·' }),
               el('span', { text: formatDuration(route.time) }),
-              ...badges.map((b) => el('span', { class: `badge alt-badge${b === 'Least traffic' ? ' quiet' : ''}`, text: b })),
+              ...badges.map((b) => el('span', { class: `badge alt-badge${b === 'Least traffic' || b === 'Recommended' ? ' quiet' : ''}`, text: b })),
             ]),
             el('div', { class: `sub alt-busy${exposure.busy >= 25 ? '' : ' none'}`, text: `${busy} · ${Math.round(exposure.friendlyShare * 100)}% paths & quiet streets` }),
           ]),
