@@ -119,6 +119,7 @@ export class MapView {
     this.onTap = () => {};
     this.onBlockTap = () => {};
     this.onResultTap = () => {};
+    this.onFavTap = () => {};
     this.onPoiTap = () => {};
     this.onBearing = () => {};
     this.suppressClickUntil = 0;
@@ -458,6 +459,28 @@ export class MapView {
   }
 
   /** Numbered pins for search results; tapping one calls onResultTap(result). */
+  /** ★ pins for saved places; tapping one opens its card. */
+  setFavorites(list) {
+    const keep = new Set((list || []).map((f) => `fav:${f.id}`));
+    for (const k of Object.keys(this.markers)) if (k.startsWith('fav:') && !keep.has(k)) this.marker(k, null);
+    for (const f of list || []) {
+      const mk = this.marker(`fav:${f.id}`, f, `<button class="fav-pin" type="button" aria-label="${String(f.name).replace(/"/g, '&quot;')}">★</button>`, { anchor: 'center' });
+      const el = mk?.getElement();
+      if (el) {
+        el.setAttribute('aria-label', f.name);
+        if (!el.dataset.bound) {
+          el.dataset.bound = '1';
+          el.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            this.onFavTap(this.favById?.(el.dataset.favId));
+          });
+        }
+        el.dataset.favId = f.id;
+      }
+    }
+    this.favById = (id) => (list || []).find((f) => f.id === id);
+  }
+
   setSearchResults(results) {
     for (const k of Object.keys(this.markers)) if (k.startsWith('result')) this.marker(k, null);
     (results || []).forEach((r, i) => {

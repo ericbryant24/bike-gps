@@ -10,6 +10,7 @@ import { shareUrl, parseSharedRoute, toGpx } from './share.js';
 import { PlaceIndex, INDEX_RADIUS_M, looksLikeAddress, racksNear } from './places.js';
 import { parseMapLink, unshorten } from './links.js';
 import { TOMTOM_KEY } from './config.js';
+import { addFavorite, removeFavorite, renameFavorite, findFavoriteNear, searchFavorites, toResult, QUICK_NAMES } from './favorites.js';
 import { parkFromTiles, formatArea, describeAmenities, formatHours, wikipediaFor, commonsPhotos } from './details.js';
 import * as bl from './blocklist.js';
 import { Navigator, simulateRide } from './navigator.js';
@@ -17,11 +18,12 @@ import { Voice } from './voice.js';
 import * as store from './storage.js';
 import * as geocode from './geocode.js';
 import * as overpass from './overpass.js';
-import { $, el, toast, hideToast, pill, hidePill, openModal, closeModal, openDrawer, closeDrawer, positionMenu, trackSheetHeight, renderSearchResults, renderProfileChips, renderSteps, renderSettings, renderBlocklist, renderEntryEditor, renderAbout, renderInstallHelp, renderComposition, renderAlternatives } from './ui.js';
+import { $, el, toast, hideToast, pill, hidePill, openModal, closeModal, openDrawer, closeDrawer, positionMenu, trackSheetHeight, renderSearchResults, renderProfileChips, renderSteps, renderSettings, renderBlocklist, renderFavorites, renderEntryEditor, renderAbout, renderInstallHelp, renderComposition, renderAlternatives } from './ui.js';
 
 const state = {
   settings: store.loadSettings(),
   blocklist: (store.load(store.KEYS.blocklist, []) || []).map(bl.normalizeEntry).filter(Boolean),
+  favorites: (store.load(store.KEYS.favorites, []) || []).filter((f) => f && Number.isFinite(f.lat) && Number.isFinite(f.lon) && f.id),
   start: null, // explicit start point, else current location
   dest: null,
   destLabel: '',
@@ -456,7 +458,7 @@ function renderSheet() {
   $('plan-time').textContent = formatDuration(r.time);
   renderTiming(r);
   $('plan-ascend').textContent = units() === 'imperial' ? `↗ ${Math.round(r.ascend * 3.28084)} ft` : `↗ ${Math.round(r.ascend)} m`;
-  $('plan-dest').textContent = state.destLabel || 'Dropped pin';
+  $('plan-dest').textContent = destText();
   renderProfileChips($('profile-chips'), state.settings.profile, (id) => {
     state.settings.profile = id;
     saveSettings();
@@ -1103,6 +1105,9 @@ async function searchAnchor() {
  * asked, fits the map to them.
  */
 function showResults(results, anchor, { commit = false, fit = false } = {}) {
+  // Saved places matching what was typed come first; a geocoder copy of the same spot is dropped.
+  const favs = searchFavorites(state.favorites, $('search').value, anchor);
+  if (favs.length) results = [...favs, ...results.filter((r) => !(Number.isFinite(r.lat) && findFavoriteNear(favs, r, 60)))];
   for (const r of results) if (Number.isFinite(r.lat) && Number.isFinite(r.lon)) r.distance = distance(anchor, r);
   // Nearest first, but a fuzzy (tier 3) local match never outranks a solid one,
   // and roads sit after places at the same tier.
@@ -1252,6 +1257,114 @@ async function runOsmSearch(q, anchor, { fromInput, ctrl }) {
   present(mergePlaces(geo, osm), true);
   if (!results.length && !fromInput) toast('No places found near you.');
 }
+
+// ------------------------------------------------------------ saved places
+function persistFavorites() {
+  store.save(store.KEYS.favorites, state.favorites);
+  map.setFavorites(state.favorites);
+  $('favorites-count').textContent = String(state.favorites.length);
+  refreshCtxSave(state.ctxPoint);
+  if (state.route) $('plan-dest').textContent = destText();
+}
+const destText = () => `${findFavoriteNear(state.favorites, state.dest) ? '★ ' : ''}${state.destLabel || 'Dropped pin'}`;
+
+/** The context-menu save button reflects whether the point is already saved. */
+function refreshCtxSave(p) {
+  const fav = p ? findFavoriteNear(state.favorites, p) : null;
+  $('ctx-save').textContent = fav ? `★ Saved as “${fav.name}” · Remove` : '☆ Save place';
+  $('ctx-save').dataset.favId = fav?.id || '';
+}
+
+/** Name a place and save it (or rename an existing favorite at that spot). */
+function saveFavoriteDialog({ label, lat, lon, kind = '' }) {
+  const existing = findFavoriteNear(state.favorites, { lat, lon });
+  const input = el('input', { type: 'text', value: existing?.name || label || '', placeholder: 'Name this place', maxlength: '60', autocomplete: 'off', 'aria-label': 'Name' });
+  const commit = () => {
+    const { list, fav } = addFavorite(state.favorites, { name: input.value, label: label || existing?.label, lat, lon, kind });
+    state.favorites = list;
+    persistFavorites();
+    closeModal();
+    toast(`★ Saved as “${fav.name}”.`);
+  };
+  input.addEventListener('keydown', (e) => e.key === 'Enter' && commit());
+  const chips = el(
+    'div',
+    { class: 'chips' },
+    QUICK_NAMES.filter((n) => !state.favorites.some((f) => f.name === n && f.id !== existing?.id)).map((n) =>
+      el('button', {
+        class: 'chip',
+        text: n,
+        onclick: () => {
+          input.value = n;
+          commit();
+        },
+      })
+    )
+  );
+  const body = el('div', { class: 'fav-form' }, [
+    el('p', { class: 'sub', text: label ? `Saving ${label}` : `Saving ${lat.toFixed(5)}, ${lon.toFixed(5)}` }),
+    input,
+    chips,
+    el('div', { class: 'row gap' }, [el('button', { class: 'primary grow', text: existing ? 'Rename' : 'Save', onclick: commit }), el('button', { class: 'secondary', text: 'Cancel', onclick: closeModal })]),
+  ]);
+  openModal(existing ? 'Rename saved place' : 'Save place', body);
+  setTimeout(() => {
+    input.focus();
+    input.select();
+  }, 50);
+}
+
+function toggleFavorite(place) {
+  const fav = findFavoriteNear(state.favorites, place);
+  if (fav) {
+    state.favorites = removeFavorite(state.favorites, fav.id);
+    persistFavorites();
+    toast(`Removed “${fav.name}” from saved places.`);
+  } else saveFavoriteDialog(place);
+}
+
+function openFavoritesView() {
+  const anchor = state.lastFix || null;
+  const render = () =>
+    renderFavorites(state.favorites, units(), anchor, {
+      onRoute: (f) => {
+        closeModal();
+        closeDrawer();
+        pickPlace(toResult(f));
+      },
+      onRename: (f) => {
+        const input = el('input', { type: 'text', value: f.name, maxlength: '60', 'aria-label': 'Name' });
+        const commit = () => {
+          state.favorites = renameFavorite(state.favorites, f.id, input.value);
+          persistFavorites();
+          openFavoritesView();
+        };
+        input.addEventListener('keydown', (e) => e.key === 'Enter' && commit());
+        openModal('Rename saved place', el('div', { class: 'fav-form' }, [input, el('div', { class: 'row gap', style: 'margin-top:14px' }, [el('button', { class: 'primary grow', text: 'Rename', onclick: commit }), el('button', { class: 'secondary', text: 'Cancel', onclick: openFavoritesView })])]));
+        setTimeout(() => input.select(), 50);
+      },
+      onShow: (f) => {
+        closeModal();
+        closeDrawer();
+        map.setView(f, 16.5);
+        setTimeout(() => openPlaceCard({ name: f.name, lat: f.lat, lon: f.lon, class: 'saved', subclass: f.kind || 'saved place', kind: f.kind }, { x: window.innerWidth / 2, y: window.innerHeight / 2 - 40 }), 650);
+      },
+      onDelete: (f) => {
+        state.favorites = removeFavorite(state.favorites, f.id);
+        persistFavorites();
+        toast(`Removed “${f.name}”.`);
+        openFavoritesView();
+      },
+    });
+  openModal('Saved places', render());
+}
+map.onFavTap = (f) => {
+  if (!f) return;
+  openPlaceCard({ name: f.name, lat: f.lat, lon: f.lon, class: 'saved', subclass: f.kind || 'saved place', kind: f.kind }, (() => {
+    const pt = map.map.project([f.lon, f.lat]);
+    return { x: pt.x, y: pt.y };
+  })());
+};
 
 // ---- pasted map links (Google / Apple / OSM / geo:) become destinations
 async function handleMapLink(link, { resolved = false } = {}) {
@@ -1413,11 +1526,12 @@ function clearSearch() {
 
 function showRecents() {
   const recents = store.load(store.KEYS.recents, []) || [];
+  const favs = state.favorites.slice(0, 6).map(toResult);
   renderSearchResults(
     $('search-results'),
-    recents.map((r) => ({ ...r, kind: 'recent', address: '' })),
+    [...favs, ...recents.filter((r) => !findFavoriteNear(state.favorites, r)).map((r) => ({ ...r, kind: 'recent', address: '' }))],
     pickPlace,
-    { units: units() }
+    { units: units(), onInfo: infoForResult }
   );
 }
 
@@ -1448,6 +1562,8 @@ map.onLongPress = (p, xy) => {
   map.setDrop(p);
   state.ctxPoint = p;
   state.ctxLabel = null;
+  state.ctxKind = '';
+  refreshCtxSave(p);
   const title = $('ctx-title');
   title.textContent = `${p.lat.toFixed(5)}, ${p.lon.toFixed(5)}`;
   title.classList.remove('place');
@@ -1492,13 +1608,16 @@ async function openPlaceCard(poi, xy) {
   const p = { lat: poi.lat, lon: poi.lon };
   state.ctxPoint = p;
   state.ctxLabel = poi.name;
+  state.ctxKind = poi.kind || poi.subclass || poi.class || '';
   map.setDrop(p);
+  refreshCtxSave(p);
+  const saved = findFavoriteNear(state.favorites, p);
   const title = $('ctx-title');
-  title.textContent = poi.name;
+  title.textContent = saved && saved.name !== poi.name ? `${saved.name} · ${poi.name}` : poi.name;
   title.classList.add('place');
   const details = $('ctx-details');
   const ref = state.lastFix || map.center;
-  const kindText = poi.class === 'bicycle_parking' ? 'Bike rack (from OpenStreetMap)' : humanType(poi);
+  const kindText = poi.class === 'bicycle_parking' ? 'Bike rack (from OpenStreetMap)' : poi.class === 'saved' ? `★ Saved place${poi.kind ? ` · ${humanType({ class: poi.kind })}` : ''}` : humanType(poi);
   const typeLine = el('div', { class: 'type', text: [kindText, state.lastFix ? `${formatDistance(distance(ref, p), units())} away` : null].filter(Boolean).join(' · ') });
   details.replaceChildren(typeLine);
   details.hidden = false;
@@ -1624,6 +1743,10 @@ $('ctx-menu').addEventListener('click', (e) => {
   if (!act) return;
   $('ctx-menu').hidden = true;
   const p = state.ctxPoint;
+  if (act === 'save') {
+    toggleFavorite({ label: state.ctxLabel || '', lat: p.lat, lon: p.lon, kind: state.ctxKind || '' });
+    return;
+  }
   if (act === 'dest') {
     if (state.ctxLabel) {
       store.pushRecent({ label: state.ctxLabel, lat: p.lat, lon: p.lon });
@@ -1708,7 +1831,8 @@ $('drawer').addEventListener('click', (e) => {
   const view = e.target.closest('button')?.dataset.view;
   if (!view) return;
   closeDrawer();
-  if (view === 'blocklist') openBlocklistView();
+  if (view === 'favorites') openFavoritesView();
+  else if (view === 'blocklist') openBlocklistView();
   else if (view === 'settings') openSettings();
   else if (view === 'about') openModal('About', renderAbout(self.APP_VERSION));
 });
@@ -1928,6 +2052,13 @@ planMenu.addEventListener('click', (e) => {
 });
 document.addEventListener('click', (e) => {
   if (!planMenu.hidden && !e.target.closest('#plan-menu') && !e.target.closest('#plan-more')) planMenu.hidden = true;
+});
+$('save-dest').addEventListener('click', () => {
+  if (state.dest) toggleFavorite({ label: state.destLabel || '', lat: state.dest.lat, lon: state.dest.lon });
+});
+$('plan-more').addEventListener('click', () => {
+  const fav = state.dest ? findFavoriteNear(state.favorites, state.dest) : null;
+  $('save-dest').textContent = fav ? `★ Saved as “${fav.name}” · Remove` : '☆ Save destination';
 });
 $('export-gpx').addEventListener('click', () => {
   const r = state.route;
@@ -2245,6 +2376,8 @@ function boot() {
   trackSheetHeight($('sheet'), $('nav-bottom'), $('install-banner')); // controls float above whichever is showing
   $('blocklist-count').textContent = String(state.blocklist.length);
   map.renderBlocklist(state.blocklist);
+  map.setFavorites(state.favorites);
+  $('favorites-count').textContent = String(state.favorites.length);
   updateOnline();
 
   const shared = parseSharedRoute(location.hash);

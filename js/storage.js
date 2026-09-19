@@ -7,6 +7,7 @@ export const KEYS = {
   settings: 'bikegps.settings.v1',
   lastRoute: 'bikegps.lastRoute.v1',
   recents: 'bikegps.recents.v1',
+  favorites: 'bikegps.favorites.v1',
   view: 'bikegps.view.v1',
 };
 

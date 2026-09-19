@@ -123,6 +123,7 @@
       <div id="ctx-title" class="menu-title">Dropped pin</div>
       <div id="ctx-details" class="menu-details" hidden></div>
       <button data-act="dest">Route here</button>
+      <button data-act="save" id="ctx-save">☆ Save place</button>
       <button data-act="start">Start from here</button>
       <button data-act="block-road">Block this road</button>
       <button data-act="block-spot">Block this spot</button>
@@ -176,6 +177,7 @@
 
     <!-- Route "more" menu -->
     <div id="plan-menu" class="panel menu" role="menu" hidden>
+      <button id="save-dest" role="menuitem">☆ Save destination</button>
       <button id="simulate-nav" role="menuitem">▶ Simulate this ride</button>
       <button id="export-gpx" role="menuitem">⬇ Download GPX</button>
       <button data-act="cancel" class="muted" role="menuitem">Cancel</button>
@@ -213,6 +215,7 @@
         <button id="drawer-close" class="icon-btn" aria-label="Close">✕</button>
       </div>
       <nav>
+        <button data-view="favorites">★ Saved places <span id="favorites-count" class="badge">0</span></button>
         <button data-view="blocklist">⛔ Blocked roads <span id="blocklist-count" class="badge">0</span></button>
         <button data-view="settings">⚙ Settings</button>
         <button data-view="about">ℹ About</button>
