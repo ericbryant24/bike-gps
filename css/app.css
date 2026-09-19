@@ -106,7 +106,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 .chip.active { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
 .badge { background: var(--accent-soft); color: var(--fg); border-radius: 999px; padding: 1px 8px; font-size: 12px; margin-left: 6px; }
-.timing { margin: -2px 0 8px; }
+.timing { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 2px 0 6px; }
 .timing .pace { font: inherit; font-size: 13px; background: none; border: 1px solid var(--accent); color: var(--accent); border-radius: 999px; padding: 1px 9px; cursor: pointer; white-space: nowrap; }
 .timing .pace:active { background: var(--accent-soft); }
 .racks-line { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 4px 0 8px; font: inherit; font-size: 13px; color: var(--muted); cursor: pointer; }
@@ -244,13 +244,26 @@ button:disabled { opacity: 0.5; cursor: default; }
 .sheet-grip { padding: 10px 0 8px; touch-action: none; cursor: grab; }
 .sheet-handle { width: 40px; height: 4px; border-radius: 2px; background: var(--border); margin: 0 auto; }
 #plan-summary { touch-action: none; }
-#plan-actions { margin: 8px 0 4px; }
-.stats { font-size: 20px; font-weight: 700; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+#plan-actions { margin: 6px 0 2px; }
+#sheet-head { position: sticky; top: 0; z-index: 2; background: var(--panel-solid); margin: 0 -16px; padding: 0 16px 2px; }
+.min0 { min-width: 0; }
+.head-actions { gap: 0; margin: -6px -10px 0 4px; flex: none; }
+.head-actions .icon-btn { min-width: 40px; height: 40px; }
+.segmented { display: flex; background: var(--accent-soft); border-radius: 999px; padding: 3px; margin: 8px 0 10px; }
+.segmented button { flex: 1; border: 0; background: none; font: inherit; font-weight: 600; font-size: 14px; padding: 8px 0; border-radius: 999px; color: var(--muted); cursor: pointer; }
+.segmented button[aria-selected="true"] { background: var(--panel-solid); color: var(--fg); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14); }
+.tab-panel { padding-top: 2px; }
+.tab-label { font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); margin: 2px 0 -4px; }
+#tab-routes .chips { margin-top: 8px; }
+.stats { font-size: 20px; font-weight: 700; display: flex; gap: 8px; align-items: center; white-space: nowrap; }
 #plan-grade { align-self: center; min-width: 24px; height: 24px; font-size: 14px; margin-right: 2px; }
 .stats .dot { color: var(--muted); font-weight: 400; }
-#plan-ascend { font-size: 15px; font-weight: 500; color: var(--muted); }
-.steps { list-style: none; margin: 12px 0 0; padding: 0; border-top: 1px solid var(--border); }
-.steps li { display: flex; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.dest-line { display: flex; gap: 6px; align-items: baseline; min-width: 0; }
+.dest-line #plan-dest { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dest-line #plan-ascend { flex: none; }
+.steps { list-style: none; margin: 0; padding: 0; }
+.steps li { display: flex; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); cursor: pointer; border-radius: 8px; }
+.steps li:active, .steps li.active { background: var(--accent-soft); }
 .steps .ico { font-size: 22px; width: 32px; text-align: center; }
 .steps .txt { flex: 1; }
 .steps .d { color: var(--muted); font-size: 13px; white-space: nowrap; }

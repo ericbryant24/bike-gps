@@ -156,7 +156,7 @@ async function enrichNames(route, steps) {
   if (state.mode !== 'navigating') {
     state.announceable = announceableSteps(steps);
     applyRatings();
-    renderSteps($('steps-list'), state.announceable, units());
+    renderSteps($('steps-list'), state.announceable, units(), { onPick: focusStep });
   } else if (state.nav?.state) renderHud(state.nav.state);
   saveLastRoute();
 }
@@ -354,6 +354,8 @@ function setRoute(route, steps) {
 
 function clearRoute() {
   $('plan-racks').hidden = true;
+  map.setHighlight([]);
+  $('plan-menu').hidden = true;
   state.destRacks = null;
   state.planAbort?.abort();
   state.route = null;
@@ -420,11 +422,11 @@ function renderTiming(r) {
     return;
   }
   const h = r.halts || { signals: 0, stops: 0 };
-  const halts = [h.signals ? `${h.signals} ${h.signals === 1 ? 'light' : 'lights'}` : null, h.stops ? `${h.stops} stop ${h.stops === 1 ? 'sign' : 'signs'}` : null].filter(Boolean).join(' and ');
+  const halts = [h.signals ? `${h.signals} ${h.signals === 1 ? 'light' : 'lights'}` : null, h.stops ? `${h.stops} ${h.stops === 1 ? 'stop' : 'stops'}` : null].filter(Boolean).join(', ');
   const pace = PACES[state.settings.pace] ? state.settings.pace : DEFAULT_PACE;
   const speed = units() === 'imperial' ? `~${Math.round(PACES[pace].mph)} mph` : `~${Math.round(PACES[pace].kmh)} km/h`;
   const paceText = `${pace[0].toUpperCase()}${pace.slice(1)} pace · ${speed}`;
-  const text = r.stopTime > 0 ? `Riding ${formatDuration(r.rideTime)} + ~${formatDuration(r.stopTime)} at ${halts} · ` : `Riding ${formatDuration(r.rideTime)} · no lights or stop signs · `;
+  const text = r.stopTime > 0 ? `${formatDuration(r.rideTime)} riding + ~${formatDuration(r.stopTime)} at ${halts}` : `${formatDuration(r.rideTime)} riding · no lights or stops`;
   // The pace is a button: tap to cycle Relaxed → Moderate → Brisk and replan.
   const order = Object.keys(PACES);
   const next = order[(order.indexOf(pace) + 1) % order.length];
@@ -444,7 +446,7 @@ function renderTiming(r) {
     })
   );
   line.hidden = false;
-  $('plan-time').title = `${text}${paceText}`;
+  $('plan-time').title = `${text} · ${paceText}`;
 }
 
 function renderSheet() {
@@ -477,7 +479,8 @@ function renderSheet() {
   renderAlternativesPanel();
   $('shared-note').hidden = !r.shared;
   $('plan-time').textContent = r.shared ? `~${formatDuration(r.time)}` : formatDuration(r.time);
-  renderSteps($('steps-list'), state.announceable, units());
+  renderSteps($('steps-list'), state.announceable, units(), { onPick: focusStep });
+  map.setHighlight([]);
   $('sheet').hidden = false;
   showRacksNearDest();
   $('install-banner').hidden = true;
@@ -1881,11 +1884,56 @@ function loadSharedRoute(shared) {
 }
 $('start-nav').addEventListener('click', () => startNavigation());
 $('simulate-nav').addEventListener('click', () => startNavigation({ simulate: true }));
-$('toggle-steps').addEventListener('click', () => {
-  const list = $('steps-list');
-  list.hidden = !list.hidden;
-  if (!list.hidden && state.sheetCollapsed) state.setSheetCollapsed?.(false, { fit: false });
-  $('toggle-steps').setAttribute('aria-expanded', String(!list.hidden));
+// ---- route sheet tabs: Overview | Routes | Steps swap in place under the pinned header
+function showSheetTab(name) {
+  state.sheetTab = name;
+  for (const b of $('plan-tabs').querySelectorAll('[role="tab"]')) b.setAttribute('aria-selected', String(b.dataset.tab === name));
+  for (const t of ['overview', 'routes', 'steps']) $(`tab-${t}`).hidden = t !== name;
+  if (state.sheetCollapsed) state.setSheetCollapsed?.(false, { fit: false });
+  $('sheet').scrollTop = 0;
+}
+$('plan-tabs').addEventListener('click', (e) => {
+  const tab = e.target.closest('[role="tab"]');
+  if (tab) showSheetTab(tab.dataset.tab);
+});
+$('plan-tabs').addEventListener('keydown', (e) => {
+  const order = ['overview', 'routes', 'steps'];
+  const i = order.indexOf(state.sheetTab || 'overview');
+  if (e.key === 'ArrowRight') showSheetTab(order[(i + 1) % order.length]);
+  if (e.key === 'ArrowLeft') showSheetTab(order[(i + order.length - 1) % order.length]);
+});
+
+/** Tapping a step pans the map to that manoeuvre and highlights the road up to the next one. */
+function focusStep(step, i) {
+  const r = state.route;
+  if (!r || state.mode === 'navigating') return;
+  const { points, cum, length } = r;
+  const at = pointAtDistance(points, cum, Math.min(step.along, length)).point;
+  const end = pointAtDistance(points, cum, Math.min(step.along + (step.distToNext || 0), length)).point;
+  map.setHighlight(step.distToNext > 5 ? slicePath(points, at, end) : []);
+  map.map.easeTo({ center: [at.lon, at.lat], zoom: Math.max(map.zoom, 16.5), padding: { top: 90, bottom: $('sheet').offsetHeight + 16, left: 0, right: 0 }, duration: 600 });
+  for (const li of $('steps-list').children) li.classList.toggle('active', li === $('steps-list').children[i]);
+}
+
+// ---- "more" menu: simulate, GPX
+const planMenu = $('plan-menu');
+$('plan-more').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const b = $('plan-more').getBoundingClientRect();
+  positionMenu(planMenu, b.left + b.width / 2, b.top);
+  planMenu.style.top = `${Math.max(8, b.top - planMenu.offsetHeight - 8)}px`; // open upwards, above the sheet
+});
+planMenu.addEventListener('click', (e) => {
+  if (e.target.closest('button')) planMenu.hidden = true;
+});
+document.addEventListener('click', (e) => {
+  if (!planMenu.hidden && !e.target.closest('#plan-menu') && !e.target.closest('#plan-more')) planMenu.hidden = true;
+});
+$('export-gpx').addEventListener('click', () => {
+  const r = state.route;
+  if (!r) return;
+  const label = state.destLabel || 'route';
+  downloadText(`${label.replace(/[^\w-]+/g, '_')}.gpx`, toGpx(r, { name: label }), 'application/gpx+xml');
 });
 $('nav-end').addEventListener('click', endNavigation);
 $('nav-avoid').addEventListener('click', avoidRoadAhead);
@@ -2103,7 +2151,7 @@ function setupSheet() {
   const sheet = $('sheet');
   const grip = $('sheet-grip');
   const header = $('plan-summary');
-  const peekHeight = () => grip.offsetHeight + header.offsetHeight + $('plan-actions').offsetHeight + 26;
+  const peekHeight = () => grip.offsetHeight + header.offsetHeight + $('plan-timing').offsetHeight + $('plan-actions').offsetHeight + 26;
   const refit = () => {
     if (state.route && state.mode === 'idle') {
       const pts = state.alternatives?.length > 1 ? state.alternatives.flatMap((r) => r.points) : state.route.points;
@@ -2127,11 +2175,15 @@ function setupSheet() {
     if (e.button && e.button !== 0) return;
     drag = { y0: e.clientY, t0: performance.now(), h0: sheet.offsetHeight, moved: false, target: e.target };
     sheet.style.setProperty('--peek-h', `${peekHeight()}px`);
-    // Touch captures implicitly; a mouse needs this to keep receiving moves once it leaves the grip.
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId);
-    } catch {
-      /* not supported */
+    // Touch captures implicitly; a mouse needs this to keep receiving moves once it
+    // leaves the grip. Never capture a press that starts on a button: capture
+    // retargets the click to the header and the button (✕, share, ⋯) never fires.
+    if (!e.target.closest('button')) {
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        /* not supported */
+      }
     }
   };
   const onMove = (e) => {
